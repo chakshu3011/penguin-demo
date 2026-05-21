@@ -64,7 +64,7 @@ function IceFloe() {
   return (
     <primitive 
       object={ice.scene} 
-      scale={1} // <-- Tweak this just like you did with the fish!
+      scale={0.01} // <-- Tweak this just like you did with the fish!
       position={[0, -0.05, 0]} // Placed slightly below 0 so the penguin stands ON it, not IN it
     />
   );

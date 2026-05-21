@@ -2,7 +2,6 @@ import "./App.css";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { XR, ARButton, Interactive, useHitTest } from "@react-three/xr";
 import { useGLTF } from "@react-three/drei";
-// NEW: Imported Suspense from React
 import { useRef, useEffect, useState, Suspense } from "react";
 
 const getRandomSpawnPosition = () => {
@@ -25,7 +24,12 @@ function Reticle({ onPlace }) {
   });
 
   return (
-    <Interactive onSelect={() => onPlace(reticleRef.current.position.clone())}>
+    <Interactive onSelect={() => {
+      const spawnPos = reticleRef.current.position.clone();
+      // Pushes the game slightly forward so it doesn't spawn directly under your feet
+      spawnPos.z -= 0.5; 
+      onPlace(spawnPos);
+    }}>
       <mesh ref={reticleRef} rotation={[-Math.PI / 2, 0, 0]}>
         <ringGeometry args={[0.15, 0.2, 32]} />
         <meshStandardMaterial color="white" />
@@ -54,7 +58,6 @@ function Penguin() {
   );
 }
 
-// PRELOAD: Forces the browser to download the model instantly so it's ready for the tap
 useGLTF.preload("/models/penguin.glb");
 
 function Fish({ position, onCollect }) {
@@ -77,14 +80,19 @@ function Fish({ position, onCollect }) {
 }
 
 export default function App() {
-  const [score, setScore] = useState(0);
   const [overlayElement, setOverlayElement] = useState(null);
   const [gamePosition, setGamePosition] = useState(null); 
   const [fishPosition, setFishPosition] = useState([0.5, 0.25, 0.5]);
+  
+  // NEW: Game State Logic
+  const [score, setScore] = useState(0);
+  const [timeLeft, setTimeLeft] = useState(30);
+  const [isGameOver, setIsGameOver] = useState(false);
 
   const ambience = useRef(null);
   const collect = useRef(null);
 
+  // Audio setup
   useEffect(() => {
     ambience.current = new Audio("/audios/antarctic_ambience.mp3");
     ambience.current.loop = true;
@@ -100,7 +108,28 @@ export default function App() {
     };
   }, []);
 
+  // NEW: The Countdown Timer Engine
+  useEffect(() => {
+    let timer;
+    // Only start the countdown if the game is placed on the floor AND time isn't up
+    if (gamePosition && timeLeft > 0 && !isGameOver) {
+      timer = setInterval(() => {
+        setTimeLeft((prev) => prev - 1);
+      }, 1000);
+    } else if (timeLeft === 0 && !isGameOver) {
+      // Time hit zero! Stop the game.
+      setIsGameOver(true);
+    }
+    
+    // Cleanup interval on unmount
+    return () => clearInterval(timer);
+  }, [gamePosition, timeLeft, isGameOver]);
+
+
   const collectFish = () => {
+    // SECURITY: If the game is over, ignore all clicks so they can't farm points!
+    if (isGameOver) return; 
+
     setScore((s) => s + 1);
     if (collect.current) {
       collect.current.currentTime = 0;
@@ -109,6 +138,7 @@ export default function App() {
     setFishPosition(getRandomSpawnPosition());
   };
 
+  // Resets the AR session completely
   const stopGame = () => {
     if (ambience.current) ambience.current.pause();
     window.location.reload();
@@ -117,28 +147,55 @@ export default function App() {
   return (
     <div style={{ width: "100vw", height: "100dvh", overflow: "hidden", position: "relative", backgroundColor: "#1a1a2e" }}>
       
-      <div ref={setOverlayElement} style={{ position: "absolute", zIndex: 10, width: "100%", height: "100%", pointerEvents: "none" }}>
+      <div ref={setOverlayElement} style={{ position: "absolute", zIndex: 10, width: "100%", height: "100%", pointerEvents: "none", display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
         
-        <div style={{ position: "absolute", top: "30px", left: "20px", color: "white", fontSize: "24px", fontWeight: "bold", textShadow: "2px 2px 4px rgba(0,0,0,0.8)" }}>
-          Fish: {score}
+        {/* TOP HUD ROW */}
+        <div style={{ display: "flex", justifyContent: "space-between", padding: "20px", width: "100%", boxSizing: "border-box" }}>
+          
+          <div style={{ color: "white", fontSize: "24px", fontWeight: "bold", textShadow: "2px 2px 4px rgba(0,0,0,0.8)" }}>
+            Fish: {score}
+          </div>
+
+          {/* NEW: 30 Second Timer Display (Turns red when under 5 seconds!) */}
+          {gamePosition && !isGameOver && (
+            <div style={{ color: timeLeft <= 5 ? "#e11d48" : "white", fontSize: "28px", fontWeight: "bold", textShadow: "2px 2px 4px rgba(0,0,0,0.8)" }}>
+              00:{timeLeft.toString().padStart(2, '0')}
+            </div>
+          )}
+
+          <button
+            onClick={stopGame}
+            style={{
+              padding: "10px 20px", fontSize: "14px", fontWeight: "bold", borderRadius: "20px",
+              border: "2px solid white", background: "#e11d48", color: "white", pointerEvents: "auto", cursor: "pointer", maxHeight: "40px"
+            }}
+          >
+            Exit AR
+          </button>
         </div>
 
+        {/* INSTRUCTIONS SCREEN */}
         {!gamePosition && (
           <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", color: "white", fontSize: "18px", fontWeight: "bold", textAlign: "center", background: "rgba(0,0,0,0.5)", padding: "10px 20px", borderRadius: "10px" }}>
             Scan the floor and tap the ring to place ICY!
           </div>
         )}
 
-        <button
-          onClick={stopGame}
-          style={{
-            position: "absolute", top: "25px", right: "20px",
-            padding: "10px 20px", fontSize: "14px", fontWeight: "bold", borderRadius: "20px",
-            border: "2px solid white", background: "#e11d48", color: "white", pointerEvents: "auto", cursor: "pointer"
-          }}
-        >
-          Exit AR
-        </button>
+        {/* NEW: GAME OVER SCREEN */}
+        {isGameOver && (
+          <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.85)", zIndex: 50, color: "white", pointerEvents: "auto" }}>
+            <h1 style={{ fontSize: "45px", marginBottom: "10px", textShadow: "2px 2px 10px rgba(0,0,0,1)", color: "#10b981" }}>TIME'S UP!</h1>
+            <p style={{ fontSize: "22px", marginBottom: "40px" }}>You fed ICY <b>{score}</b> fish!</p>
+            
+            <button
+              onClick={stopGame}
+              style={{ padding: "15px 35px", fontSize: "18px", fontWeight: "bold", borderRadius: "30px", border: "none", background: "#2B4BAA", color: "white", cursor: "pointer", boxShadow: "0 4px 15px rgba(0,0,0,0.5)" }}
+            >
+              Play Again
+            </button>
+          </div>
+        )}
+
       </div>
 
       {overlayElement && (
@@ -168,16 +225,16 @@ export default function App() {
           {!gamePosition ? (
             <Reticle onPlace={setGamePosition} />
           ) : (
-            // CRITICAL FIX: Wraps the dynamic models in a Suspense boundary
-            // This tells React: "If these take a second to load, don't crash the camera!"
             <Suspense fallback={null}>
               <group position={gamePosition}>
                 <Penguin />
-                <Fish position={fishPosition} onCollect={collectFish} />
+                {/* Only render the clickable 3D fish if the game is actually running! */}
+                {!isGameOver && (
+                  <Fish position={fishPosition} onCollect={collectFish} />
+                )}
               </group>
             </Suspense>
           )}
-
         </XR>
       </Canvas>
     </div>

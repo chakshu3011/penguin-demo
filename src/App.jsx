@@ -1,8 +1,7 @@
 import "./App.css";
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { XR, ARButton, Interactive, useHitTest, useXR } from "@react-three/xr";
-// NEW: Imported useAnimations to unlock the real 3D animations
-import { useGLTF, useAnimations } from "@react-three/drei"; 
+import { Canvas, useFrame } from "@react-three/fiber";
+import { XR, ARButton, Interactive, useXR } from "@react-three/xr";
+import { useGLTF, useAnimations } from "@react-three/drei";
 import { useRef, useEffect, useState, Suspense } from "react";
 
 function XRTracker({ onXRStart }) {
@@ -20,50 +19,7 @@ const getRandomSpawnPosition = () => {
 };
 
 // ==========================================
-// 1. THE RETICLE (Targeting Ring)
-// ==========================================
-function Reticle({ onPlace }) {
-  const reticleRef = useRef();
-  const { camera } = useThree(); 
-
-  useHitTest((hitMatrix, hit) => {
-    if (hit) {
-      hitMatrix.decompose(
-        reticleRef.current.position,
-        reticleRef.current.quaternion,
-        reticleRef.current.scale
-      );
-    }
-  });
-
-  return (
-    <Interactive onSelect={() => {
-      const spawnPos = reticleRef.current.position.clone();
-      
-      // THE SPAWN FIX: Calculate distance to camera. 
-      // If you aim at your feet, it forces the game 1.5m away from you!
-      const dx = spawnPos.x - camera.position.x;
-      const dz = spawnPos.z - camera.position.z;
-      const distance = Math.sqrt(dx * dx + dz * dz);
-      
-      if (distance < 1.5) {
-        const push = 1.5 - distance;
-        spawnPos.x += (dx / distance) * push;
-        spawnPos.z += (dz / distance) * push;
-      }
-      
-      onPlace(spawnPos);
-    }}>
-      <mesh ref={reticleRef} rotation={[-Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[0.15, 0.2, 32]} />
-        <meshStandardMaterial color="white" />
-      </mesh>
-    </Interactive>
-  );
-}
-
-// ==========================================
-// 2. GAME MODELS
+// GAME MODELS
 // ==========================================
 useGLTF.preload("/models/penguin.glb");
 useGLTF.preload("/models/fish.glb"); 
@@ -71,23 +27,34 @@ useGLTF.preload("/models/ice_floe.glb");
 
 function IceFloe() {
   const ice = useGLTF("/models/ice_floe.glb");
-  return <primitive object={ice.scene} scale={0.05} position={[0, -0.05, 0]} />;
+  return (
+    <primitive 
+      object={ice.scene} 
+      // X, Y, Z scaling: Stretches the width and depth, keeps the height flat
+      scale={[0.15, 0.02, 0.15]} 
+      position={[0, -0.05, 0]} 
+    />
+  );
 }
 
-function Penguin({ isGameOver, score }) {
+function Penguin({ isGameOver, fishPosition }) {
   const group = useRef();
   const penguin = useGLTF("/models/penguin.glb");
-  
-  // NEW: Grab the baked animations out of the .glb file
   const { actions, names } = useAnimations(penguin.animations, group);
 
   useEffect(() => {
-    // If the file has animations, play the first one automatically
     if (names && names.length > 0) {
       const defaultAnimation = actions[names[0]];
       defaultAnimation.reset().fadeIn(0.5).play();
     }
   }, [actions, names]);
+
+  useFrame(() => {
+    // Forces ICY to constantly rotate and face the active fish
+    if (group.current && !isGameOver && fishPosition) {
+      group.current.lookAt(fishPosition[0], group.current.position.y, fishPosition[2]);
+    }
+  });
 
   return <primitive ref={group} object={penguin.scene} scale={0.5} position={[0, 0, 0]} />;
 }
@@ -110,12 +77,12 @@ function Fish({ position, onCollect }) {
 }
 
 // ==========================================
-// 3. MAIN APP
+// MAIN APP
 // ==========================================
 export default function App() {
   const [isARActive, setIsARActive] = useState(false);
+  const [hasStarted, setHasStarted] = useState(false); // NEW: Tracks if "Start Game" was clicked
   const [overlayElement, setOverlayElement] = useState(null);
-  const [gamePosition, setGamePosition] = useState(null); 
   const [fishPosition, setFishPosition] = useState([0.5, 0.25, 0.5]);
   
   const [score, setScore] = useState(0);
@@ -138,7 +105,7 @@ export default function App() {
     footsteps.current.volume = 0.5;
 
     penguinChirp.current = new Audio("/audios/baby_penguin.mp3");
-    penguinChirp.current.volume = 1.0; // Boosted volume for the end screen
+    penguinChirp.current.volume = 1.0; 
 
     return () => {
       if (ambience.current) ambience.current.pause();
@@ -150,22 +117,21 @@ export default function App() {
   // Timer Engine
   useEffect(() => {
     let timer;
-    if (gamePosition && timeLeft > 0 && !isGameOver) {
+    // Timer ONLY runs if the game has started
+    if (hasStarted && timeLeft > 0 && !isGameOver) {
       timer = setInterval(() => setTimeLeft((prev) => prev - 1), 1000);
     } else if (timeLeft === 0 && !isGameOver) {
       setIsGameOver(true);
-      
-      // NEW: Play the penguin voice line exactly when the game ends!
       if (penguinChirp.current) {
         penguinChirp.current.currentTime = 0;
         penguinChirp.current.play().catch(e => console.log(e));
       }
     }
     return () => clearInterval(timer);
-  }, [gamePosition, timeLeft, isGameOver]);
+  }, [hasStarted, timeLeft, isGameOver]);
 
   const collectFish = () => {
-    if (isGameOver) return; 
+    if (isGameOver || !hasStarted) return; 
 
     setScore(score + 1);
     
@@ -181,12 +147,15 @@ export default function App() {
     setFishPosition(getRandomSpawnPosition());
   };
 
+  const startGame = () => {
+    setHasStarted(true);
+  };
+
   const stopGame = () => {
     if (ambience.current) ambience.current.pause();
     window.location.reload();
   };
 
-  // NEW: The Logic for the Celebration Tiers
   const getEndMessage = () => {
     if (score === 0) return "ICY is sad and starving! 😭";
     if (score <= 3) return "ICY survived, but is still hungry! 🐟";
@@ -197,6 +166,7 @@ export default function App() {
   return (
     <div style={{ width: "100vw", height: "100dvh", overflow: "hidden", position: "relative", backgroundColor: "#0b0f19" }}>
       
+      {/* LANDING PAGE */}
       {!isARActive && (
         <div style={{ position: "absolute", zIndex: 5, width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyItems: "center", paddingTop: "20vh", color: "white" }}>
           <h1 style={{ fontSize: "40px", marginBottom: "10px" }}>ICY AR</h1>
@@ -204,13 +174,15 @@ export default function App() {
         </div>
       )}
 
+      {/* AR HUD OVERLAY */}
       <div ref={setOverlayElement} style={{ position: "absolute", zIndex: 10, width: "100%", height: "100%", pointerEvents: "none", display: isARActive ? "flex" : "none", flexDirection: "column", justifyContent: "space-between" }}>
         
+        {/* Top Bar */}
         <div style={{ display: "flex", justifyContent: "space-between", padding: "20px", width: "100%", boxSizing: "border-box" }}>
           <div style={{ color: "white", fontSize: "24px", fontWeight: "bold", textShadow: "2px 2px 4px rgba(0,0,0,0.8)" }}>
             Fish: {score}
           </div>
-          {gamePosition && !isGameOver && (
+          {hasStarted && !isGameOver && (
             <div style={{ color: timeLeft <= 5 ? "#e11d48" : "white", fontSize: "28px", fontWeight: "bold", textShadow: "2px 2px 4px rgba(0,0,0,0.8)" }}>
               00:{timeLeft.toString().padStart(2, '0')}
             </div>
@@ -220,22 +192,23 @@ export default function App() {
           </button>
         </div>
 
-        {!gamePosition && (
-          <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", color: "white", fontSize: "18px", fontWeight: "bold", textAlign: "center", background: "rgba(0,0,0,0.5)", padding: "10px 20px", borderRadius: "10px" }}>
-            Scan the floor and tap the ring to place ICY!
+        {/* START GAME BUTTON - Appears after entering AR, disappears when clicked */}
+        {!hasStarted && !isGameOver && (
+          <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", pointerEvents: "auto" }}>
+            <button onClick={startGame} style={{ padding: "15px 40px", fontSize: "24px", fontWeight: "bold", borderRadius: "30px", border: "none", background: "#10b981", color: "white", cursor: "pointer", boxShadow: "0 4px 15px rgba(0,0,0,0.5)" }}>
+              Start Game!
+            </button>
           </div>
         )}
 
+        {/* GAME OVER SCREEN */}
         {isGameOver && (
           <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.85)", zIndex: 50, color: "white", pointerEvents: "auto", textAlign: "center", padding: "20px" }}>
             <h1 style={{ fontSize: "45px", marginBottom: "10px", textShadow: "2px 2px 10px rgba(0,0,0,1)", color: "#10b981" }}>TIME'S UP!</h1>
             <p style={{ fontSize: "22px", marginBottom: "10px" }}>You fed ICY <b>{score}</b> fish!</p>
-            
-            {/* NEW: Displays the dynamic celebration text */}
             <p style={{ fontSize: "20px", fontWeight: "bold", marginBottom: "40px", color: "#60a5fa" }}>
               {getEndMessage()}
             </p>
-
             <button onClick={stopGame} style={{ padding: "15px 35px", fontSize: "18px", fontWeight: "bold", borderRadius: "30px", border: "none", background: "#2B4BAA", color: "white", cursor: "pointer", boxShadow: "0 4px 15px rgba(0,0,0,0.5)" }}>
               Play Again
             </button>
@@ -243,6 +216,7 @@ export default function App() {
         )}
       </div>
 
+      {/* AR ACTIVATION BUTTON */}
       {overlayElement && (
         <ARButton
           sessionInit={{ requiredFeatures: ["hit-test"], optionalFeatures: ["dom-overlay"], domOverlay: { root: overlayElement } }}
@@ -251,24 +225,19 @@ export default function App() {
         />
       )}
 
+      {/* 3D ENGINE */}
       <Canvas style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}>
         <XR>
           <XRTracker onXRStart={setIsARActive} />
           {isARActive && (
             <>
               <ambientLight intensity={2} />
-              {!gamePosition ? (
-                <Reticle onPlace={setGamePosition} />
-              ) : (
-                <Suspense fallback={null}>
-                  <group position={gamePosition}>
-                    <IceFloe />
-                    {/* Passed the game state down so the Penguin component can react later if needed */}
-                    <Penguin isGameOver={isGameOver} score={score} />
-                    {!isGameOver && <Fish position={fishPosition} onCollect={collectFish} />}
-                  </group>
-                </Suspense>
-              )}
+              {/* INSTANT SPAWN: Game is fixed 1m down and 1.5m in front of the camera start position */}
+              <group position={[0, -1, -1.5]}>
+                <IceFloe />
+                <Penguin isGameOver={isGameOver} fishPosition={fishPosition} />
+                {hasStarted && !isGameOver && <Fish position={fishPosition} onCollect={collectFish} />}
+              </group>
             </>
           )}
         </XR>

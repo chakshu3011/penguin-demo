@@ -3,6 +3,7 @@ import { Canvas, useFrame } from "@react-three/fiber";
 import { XR, ARButton, Interactive, useHitTest } from "@react-three/xr";
 import { useGLTF } from "@react-three/drei";
 import { useRef, useEffect, useState, Suspense } from "react";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 
 const getRandomSpawnPosition = () => {
   const angle = Math.random() * Math.PI * 2; 
@@ -10,8 +11,13 @@ const getRandomSpawnPosition = () => {
   return [Math.cos(angle) * radius, 0.25, Math.sin(angle) * radius];
 };
 
+// ==========================================
+// 1. THE RETICLE (TARGETING RING)
+// ==========================================
 function Reticle({ onPlace }) {
   const reticleRef = useRef();
+  // NEW: Hooks into the live AR camera position
+  const { camera } = useThree(); 
 
   useHitTest((hitMatrix, hit) => {
     if (hit) {
@@ -20,16 +26,26 @@ function Reticle({ onPlace }) {
         reticleRef.current.quaternion,
         reticleRef.current.scale
       );
+
+      // Calculate how far the ring is from the phone on the X/Z floor plane
+      const dx = reticleRef.current.position.x - camera.position.x;
+      const dz = reticleRef.current.position.z - camera.position.z;
+      const distance = Math.sqrt(dx * dx + dz * dz);
+
+      // FORCE FIELD LOGIC: If the ring is closer than 1.2 meters to your feet, push it away!
+      const minDistance = 1.2; 
+      if (distance > 0.01 && distance < minDistance) {
+        const pushAmount = minDistance - distance;
+        // Pushes the ring out along the exact line you are looking
+        reticleRef.current.position.x += (dx / distance) * pushAmount;
+        reticleRef.current.position.z += (dz / distance) * pushAmount;
+      }
     }
   });
 
   return (
-    <Interactive onSelect={() => {
-      const spawnPos = reticleRef.current.position.clone();
-      // Pushes the game slightly forward so it doesn't spawn directly under your feet
-      spawnPos.z -= 0.5; 
-      onPlace(spawnPos);
-    }}>
+    // Because the reticle is pushed forward, we don't need the spawnPos offset anymore
+    <Interactive onSelect={() => onPlace(reticleRef.current.position.clone())}>
       <mesh ref={reticleRef} rotation={[-Math.PI / 2, 0, 0]}>
         <ringGeometry args={[0.15, 0.2, 32]} />
         <meshStandardMaterial color="white" />

@@ -27,7 +27,7 @@ function IceFloe() {
   return (
     <primitive 
       object={ice.scene} 
-      scale={0.1} 
+      scale={0.01} 
       position={[0, -0.02, 0]} // Sits just slightly above the infinite ice floor
     />
   );
@@ -93,6 +93,7 @@ export default function App() {
   const ambience = useRef(null);
   const collect = useRef(null);
   const footsteps = useRef(null);
+  const penguinChirp = useRef(null);
 
   useEffect(() => {
     ambience.current = new Audio("/audios/antarctic_ambience.mp3");
@@ -103,6 +104,9 @@ export default function App() {
     
     footsteps.current = new Audio("/audios/snow_footsteps.mp3");
     footsteps.current.volume = 0.5;
+
+    penguinChirp.current = new Audio("/audios/baby_penguin.mp3");
+    penguinChirp.current.volume = 0.8;
 
     return () => {
       if (ambience.current) ambience.current.pause();
@@ -126,26 +130,36 @@ export default function App() {
   const collectFish = () => {
     if (isGameOver) return; 
 
-    setScore((s) => s + 1);
+    // We calculate the new score first
+    const newScore = score + 1;
+    setScore(newScore);
     
-    // NEW: Physical device vibration for a satisfying catch!
-    if (navigator.vibrate) navigator.vibrate(50); 
-    
+    // Play standard collect/footstep sounds every time
     if (collect.current) {
       collect.current.currentTime = 0;
       collect.current.play().catch((e) => console.log(e));
     }
-
     if (footsteps.current) {
       footsteps.current.currentTime = 0;
       footsteps.current.play().catch((e) => console.log(e));
     }
+
+    // <-- THE COMBO LOGIC -->
+    // The % (modulo) operator checks if the score is perfectly divisible by 5
+    if (newScore % 5 === 0) {
+      if (penguinChirp.current) {
+        penguinChirp.current.currentTime = 0;
+        penguinChirp.current.play().catch((e) => console.log(e));
+      }
+    }
+    // <--------------------->
 
     setFishPosition(getRandomSpawnPosition());
   };
 
   const stopGame = () => {
     if (ambience.current) ambience.current.pause();
+    if (penguinChirp.current) penguinChirp.current.pause();
     window.location.reload();
   };
 

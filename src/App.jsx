@@ -2,23 +2,15 @@ import "./App.css";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { XR, ARButton, Interactive, useHitTest } from "@react-three/xr";
 import { useGLTF } from "@react-three/drei";
-import { useRef, useEffect, useState } from "react";
+// NEW: Imported Suspense from React
+import { useRef, useEffect, useState, Suspense } from "react";
 
-// ==========================================
-// MATH HELPER: RANDOM SPAWN GENERATOR
-// Calculates a random position around the penguin
-// ==========================================
 const getRandomSpawnPosition = () => {
-  const angle = Math.random() * Math.PI * 2; // Random direction (0 to 360 degrees)
-  const radius = 0.4 + Math.random() * 0.8; // Random distance (0.4m to 1.2m away)
-  
-  // Calculate X and Z coordinates based on angle and radius. Y is 0.25 (floating height)
+  const angle = Math.random() * Math.PI * 2; 
+  const radius = 0.4 + Math.random() * 0.8; 
   return [Math.cos(angle) * radius, 0.25, Math.sin(angle) * radius];
 };
 
-// ==========================================
-// 1. THE RETICLE (TARGETING RING)
-// ==========================================
 function Reticle({ onPlace }) {
   const reticleRef = useRef();
 
@@ -42,9 +34,6 @@ function Reticle({ onPlace }) {
   );
 }
 
-// ==========================================
-// 2. GAME COMPONENTS
-// ==========================================
 function Penguin() {
   const group = useRef();
   const penguin = useGLTF("/models/penguin.glb");
@@ -65,7 +54,9 @@ function Penguin() {
   );
 }
 
-// NEW: The Fish now accepts a `position` prop from the main App state
+// PRELOAD: Forces the browser to download the model instantly so it's ready for the tap
+useGLTF.preload("/models/penguin.glb");
+
 function Fish({ position, onCollect }) {
   const ref = useRef();
 
@@ -85,15 +76,10 @@ function Fish({ position, onCollect }) {
   );
 }
 
-// ==========================================
-// 3. MAIN APP
-// ==========================================
 export default function App() {
   const [score, setScore] = useState(0);
   const [overlayElement, setOverlayElement] = useState(null);
   const [gamePosition, setGamePosition] = useState(null); 
-  
-  // NEW: State to track exactly where the active fish is
   const [fishPosition, setFishPosition] = useState([0.5, 0.25, 0.5]);
 
   const ambience = useRef(null);
@@ -114,18 +100,12 @@ export default function App() {
     };
   }, []);
 
-  // THE GAME LOOP
   const collectFish = () => {
-    // 1. Add point
     setScore((s) => s + 1);
-    
-    // 2. Play Sound
     if (collect.current) {
       collect.current.currentTime = 0;
       collect.current.play().catch((e) => console.log(e));
     }
-    
-    // 3. Teleport the box to a new random location
     setFishPosition(getRandomSpawnPosition());
   };
 
@@ -188,11 +168,14 @@ export default function App() {
           {!gamePosition ? (
             <Reticle onPlace={setGamePosition} />
           ) : (
-            <group position={gamePosition}>
-              <Penguin />
-              {/* Pass the dynamic position state and the collect function into the Fish */}
-              <Fish position={fishPosition} onCollect={collectFish} />
-            </group>
+            // CRITICAL FIX: Wraps the dynamic models in a Suspense boundary
+            // This tells React: "If these take a second to load, don't crash the camera!"
+            <Suspense fallback={null}>
+              <group position={gamePosition}>
+                <Penguin />
+                <Fish position={fishPosition} onCollect={collectFish} />
+              </group>
+            </Suspense>
           )}
 
         </XR>

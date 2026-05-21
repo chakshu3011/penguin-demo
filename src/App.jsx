@@ -1,22 +1,69 @@
 import "./App.css";
-import * as THREE from "three"; 
-import { Canvas, useFrame } from "@react-three/fiber";
-import { XR, ARButton, Interactive } from "@react-three/xr";
-import { useGLTF, ContactShadows, Sparkles } from "@react-three/drei";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
+// NEW: We imported useXR to track if the camera is open
+import { XR, ARButton, Interactive, useHitTest, useXR } from "@react-three/xr";
+import { useGLTF } from "@react-three/drei";
 import { useRef, useEffect, useState, Suspense } from "react";
 
 // ==========================================
-// MATH HELPER: WIDE SPAWN RADIUS
+// 1. AR STATE TRACKER (Invisible Helper)
 // ==========================================
+// This constantly checks if WebXR is active and tells our main UI
+function XRTracker({ onXRStart }) {
+  const { isPresenting } = useXR();
+  useEffect(() => {
+    onXRStart(isPresenting);
+  }, [isPresenting, onXRStart]);
+  return null;
+}
+
 const getRandomSpawnPosition = () => {
   const angle = Math.random() * Math.PI * 2; 
-  // Pushed back to a wide 1.5 meter radius so they spread out!
-  const radius = 0.5 + Math.random() * 1.5; 
+  const radius = 0.4 + Math.random() * 0.8; 
   return [Math.cos(angle) * radius, 0.25, Math.sin(angle) * radius];
 };
 
 // ==========================================
-// GAME COMPONENTS 
+// 2. THE RETICLE (TARGETING RING)
+// ==========================================
+function Reticle({ onPlace }) {
+  const reticleRef = useRef();
+  const { camera } = useThree(); 
+
+  useHitTest((hitMatrix, hit) => {
+    if (hit) {
+      hitMatrix.decompose(
+        reticleRef.current.position,
+        reticleRef.current.quaternion,
+        reticleRef.current.scale
+      );
+
+      const dx = reticleRef.current.position.x - camera.position.x;
+      const dz = reticleRef.current.position.z - camera.position.z;
+      const distance = Math.sqrt(dx * dx + dz * dz);
+
+      // 1.2 Meter Forcefield to prevent spawning on feet
+      const minDistance = 1.2; 
+      if (distance > 0.01 && distance < minDistance) {
+        const pushAmount = minDistance - distance;
+        reticleRef.current.position.x += (dx / distance) * pushAmount;
+        reticleRef.current.position.z += (dz / distance) * pushAmount;
+      }
+    }
+  });
+
+  return (
+    <Interactive onSelect={() => onPlace(reticleRef.current.position.clone())}>
+      <mesh ref={reticleRef} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.15, 0.2, 32]} />
+        <meshStandardMaterial color="white" />
+      </mesh>
+    </Interactive>
+  );
+}
+
+// ==========================================
+// 3. GAME MODELS
 // ==========================================
 useGLTF.preload("/models/penguin.glb");
 useGLTF.preload("/models/fish.glb"); 
@@ -27,37 +74,23 @@ function IceFloe() {
   return (
     <primitive 
       object={ice.scene} 
-      scale={0.01} 
-      position={[0, -0.02, 0]} // Sits just slightly above the infinite ice floor
+      scale={0.05} // <-- Adjust if it's still too big!
+      position={[0, -0.05, 0]} 
     />
   );
 }
 
-function Penguin({ targetPosition }) {
+function Penguin() {
   const group = useRef();
   const penguin = useGLTF("/models/penguin.glb");
 
   useFrame((state) => {
-    if (!group.current) return;
-
-    const currentPos = group.current.position;
-    const target = new THREE.Vector3(targetPosition[0], 0, targetPosition[2]); 
-    const distance = currentPos.distanceTo(target);
-
-    if (distance > 0.15) {
-      group.current.lookAt(target);
-      currentPos.lerp(target, 0.03);
-      group.current.rotation.z = Math.sin(state.clock.elapsedTime * 15) * 0.2;
-      group.current.scale.y = 0.5; 
-    } else {
-      group.current.rotation.z = 0;
-      group.current.scale.y = 0.5 + Math.sin(state.clock.elapsedTime * 3) * 0.015; 
+    if (group.current) {
+      group.current.rotation.y = Math.sin(state.clock.elapsedTime) * 0.5;
     }
   });
 
-  return (
-    <primitive ref={group} object={penguin.scene} scale={0.5} position={[0, 0, 0]} />
-  );
+  return <primitive ref={group} object={penguin.scene} scale={0.5} position={[0, 0, 0]} />;
 }
 
 function Fish({ position, onCollect }) {
@@ -78,14 +111,16 @@ function Fish({ position, onCollect }) {
 }
 
 // ==========================================
-// MAIN APP
+// 4. MAIN APP
 // ==========================================
 export default function App() {
-  const [overlayElement, setOverlayElement] = useState(null);
+  // NEW: Strict AR State Tracker
+  const [isARActive, setIsARActive] = useState(false);
   
-  // Game States
-  const [gameStarted, setGameStarted] = useState(false);
+  const [overlayElement, setOverlayElement] = useState(null);
+  const [gamePosition, setGamePosition] = useState(null); 
   const [fishPosition, setFishPosition] = useState([0.5, 0.25, 0.5]);
+  
   const [score, setScore] = useState(0);
   const [timeLeft, setTimeLeft] = useState(30);
   const [isGameOver, setIsGameOver] = useState(false);
@@ -106,35 +141,31 @@ export default function App() {
     footsteps.current.volume = 0.5;
 
     penguinChirp.current = new Audio("/audios/baby_penguin.mp3");
-    penguinChirp.current.volume = 0.8;
+    penguinChirp.current.volume = 0.8; 
 
     return () => {
       if (ambience.current) ambience.current.pause();
       if (footsteps.current) footsteps.current.pause();
+      if (penguinChirp.current) penguinChirp.current.pause();
     };
   }, []);
 
-  // Timer Engine
   useEffect(() => {
     let timer;
-    if (gameStarted && timeLeft > 0 && !isGameOver) {
-      timer = setInterval(() => {
-        setTimeLeft((prev) => prev - 1);
-      }, 1000);
+    if (gamePosition && timeLeft > 0 && !isGameOver) {
+      timer = setInterval(() => setTimeLeft((prev) => prev - 1), 1000);
     } else if (timeLeft === 0 && !isGameOver) {
       setIsGameOver(true);
     }
     return () => clearInterval(timer);
-  }, [gameStarted, timeLeft, isGameOver]);
+  }, [gamePosition, timeLeft, isGameOver]);
 
   const collectFish = () => {
     if (isGameOver) return; 
 
-    // We calculate the new score first
     const newScore = score + 1;
     setScore(newScore);
     
-    // Play standard collect/footstep sounds every time
     if (collect.current) {
       collect.current.currentTime = 0;
       collect.current.play().catch((e) => console.log(e));
@@ -144,122 +175,101 @@ export default function App() {
       footsteps.current.play().catch((e) => console.log(e));
     }
 
-    // <-- THE COMBO LOGIC -->
-    // The % (modulo) operator checks if the score is perfectly divisible by 5
-    if (newScore % 5 === 0) {
-      if (penguinChirp.current) {
-        penguinChirp.current.currentTime = 0;
-        penguinChirp.current.play().catch((e) => console.log(e));
-      }
+    // Play baby penguin sound every 5 fish!
+    if (newScore % 5 === 0 && penguinChirp.current) {
+      penguinChirp.current.currentTime = 0;
+      penguinChirp.current.play().catch((e) => console.log(e));
     }
-    // <--------------------->
 
     setFishPosition(getRandomSpawnPosition());
   };
 
   const stopGame = () => {
     if (ambience.current) ambience.current.pause();
-    if (penguinChirp.current) penguinChirp.current.pause();
     window.location.reload();
   };
 
   return (
-    <div style={{ width: "100vw", height: "100dvh", overflow: "hidden", position: "relative", backgroundColor: "#1a1a2e" }}>
+    <div style={{ width: "100vw", height: "100dvh", overflow: "hidden", position: "relative", backgroundColor: "#0b0f19" }}>
       
-      <div ref={setOverlayElement} style={{ position: "absolute", zIndex: 10, width: "100%", height: "100%", pointerEvents: "none", display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
+      {/* ---------------------------------------------------------------- */}
+      {/* STATE 1: LANDING PAGE (Visible ONLY when not in AR)              */}
+      {/* ---------------------------------------------------------------- */}
+      {!isARActive && (
+        <div style={{ position: "absolute", zIndex: 5, width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyItems: "center", paddingTop: "20vh", color: "white" }}>
+          <h1 style={{ fontSize: "40px", marginBottom: "10px" }}>ICY AR</h1>
+          <p style={{ fontSize: "18px", opacity: 0.8 }}>An Augmented Reality Experience</p>
+        </div>
+      )}
+
+      {/* ---------------------------------------------------------------- */}
+      {/* STATE 2: AR HUD (Visible ONLY when AR is running)                */}
+      {/* ---------------------------------------------------------------- */}
+      <div ref={setOverlayElement} style={{ position: "absolute", zIndex: 10, width: "100%", height: "100%", pointerEvents: "none", display: isARActive ? "flex" : "none", flexDirection: "column", justifyContent: "space-between" }}>
         
-        {/* HUD */}
         <div style={{ display: "flex", justifyContent: "space-between", padding: "20px", width: "100%", boxSizing: "border-box" }}>
           <div style={{ color: "white", fontSize: "24px", fontWeight: "bold", textShadow: "2px 2px 4px rgba(0,0,0,0.8)" }}>
             Fish: {score}
           </div>
-
-          {gameStarted && !isGameOver && (
+          {gamePosition && !isGameOver && (
             <div style={{ color: timeLeft <= 5 ? "#e11d48" : "white", fontSize: "28px", fontWeight: "bold", textShadow: "2px 2px 4px rgba(0,0,0,0.8)" }}>
               00:{timeLeft.toString().padStart(2, '0')}
             </div>
           )}
-
-          <button
-            onClick={stopGame}
-            style={{ padding: "10px 20px", fontSize: "14px", fontWeight: "bold", borderRadius: "20px", border: "2px solid white", background: "#e11d48", color: "white", pointerEvents: "auto", cursor: "pointer", maxHeight: "40px" }}
-          >
+          <button onClick={stopGame} style={{ padding: "10px 20px", fontSize: "14px", fontWeight: "bold", borderRadius: "20px", border: "2px solid white", background: "#e11d48", color: "white", pointerEvents: "auto", cursor: "pointer", maxHeight: "40px" }}>
             Exit AR
           </button>
         </div>
 
-        {/* START SCREEN */}
-        {!gameStarted && !isGameOver && (
-          <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", zIndex: 30, pointerEvents: "auto" }}>
-            <button 
-              onClick={() => setGameStarted(true)}
-              style={{ padding: "20px 40px", fontSize: "24px", fontWeight: "bold", borderRadius: "40px", border: "none", background: "#10b981", color: "white", cursor: "pointer", boxShadow: "0 10px 25px rgba(0,0,0,0.5)" }}
-            >
-              Start Game!
-            </button>
+        {!gamePosition && (
+          <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", color: "white", fontSize: "18px", fontWeight: "bold", textAlign: "center", background: "rgba(0,0,0,0.5)", padding: "10px 20px", borderRadius: "10px" }}>
+            Scan the floor and tap the ring to place ICY!
           </div>
         )}
 
-        {/* GAME OVER SCREEN */}
         {isGameOver && (
           <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.85)", zIndex: 50, color: "white", pointerEvents: "auto" }}>
             <h1 style={{ fontSize: "45px", marginBottom: "10px", textShadow: "2px 2px 10px rgba(0,0,0,1)", color: "#10b981" }}>TIME'S UP!</h1>
             <p style={{ fontSize: "22px", marginBottom: "40px" }}>You fed ICY <b>{score}</b> fish!</p>
-            <button
-              onClick={stopGame}
-              style={{ padding: "15px 35px", fontSize: "18px", fontWeight: "bold", borderRadius: "30px", border: "none", background: "#2B4BAA", color: "white", cursor: "pointer", boxShadow: "0 4px 15px rgba(0,0,0,0.5)" }}
-            >
+            <button onClick={stopGame} style={{ padding: "15px 35px", fontSize: "18px", fontWeight: "bold", borderRadius: "30px", border: "none", background: "#2B4BAA", color: "white", cursor: "pointer", boxShadow: "0 4px 15px rgba(0,0,0,0.5)" }}>
               Play Again
             </button>
           </div>
         )}
       </div>
 
+      {/* AR ACTIVATION BUTTON */}
       {overlayElement && (
         <ARButton
-          sessionInit={{
-            // Removed hit-test entirely!
-            optionalFeatures: ["dom-overlay"],
-            domOverlay: { root: overlayElement } 
-          }}
-          onClick={() => {
-            if (ambience.current) ambience.current.play().catch(e => console.log(e));
-          }}
+          sessionInit={{ requiredFeatures: ["hit-test"], optionalFeatures: ["dom-overlay"], domOverlay: { root: overlayElement } }}
+          onClick={() => { if (ambience.current) ambience.current.play().catch(e => console.log(e)); }}
           style={{ position: 'absolute', bottom: '40px', left: '50%', transform: 'translateX(-50%)', padding: '14px 28px', fontSize: '16px', fontWeight: 'bold', borderRadius: '30px', border: 'none', background: 'white', color: 'black', cursor: 'pointer', zIndex: 20 }}
         />
       )}
 
+      {/* 3D ENGINE */}
       <Canvas style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}>
         <XR>
-          <ambientLight intensity={2} />
+          {/* Constantly checks if the AR camera is active */}
+          <XRTracker onXRStart={setIsARActive} />
           
-          <Suspense fallback={null}>
-            {/* This group puts the entire game 1 meter below eye level, 
-              and 1.5 meters in front of the camera. It floats with you!
-            */}
-            <group position={[0, -1, -1.5]}>
-              
-              {/* THE INFINITE ICE FLOOR */}
-              <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.03, 0]}>
-                <circleGeometry args={[10, 64]} />
-                <meshStandardMaterial color="#a0d8ef" transparent opacity={0.6} />
-              </mesh>
-
-              {/* MASSIVE BLIZZARD (Scaled up to cover the big floor) */}
-              <Sparkles count={150} scale={8} size={3} speed={0.4} opacity={0.8} color="white" position={[0, 2, 0]} />
-              
-              <ContactShadows position={[0, -0.01, 0]} opacity={0.6} scale={4} blur={2} far={1} />
-
-              <IceFloe />
-              
-              <Penguin targetPosition={fishPosition} />
-              
-              {gameStarted && !isGameOver && (
-                <Fish position={fishPosition} onCollect={collectFish} />
+          {/* ONLY render the game world if we are inside AR */}
+          {isARActive && (
+            <>
+              <ambientLight intensity={2} />
+              {!gamePosition ? (
+                <Reticle onPlace={setGamePosition} />
+              ) : (
+                <Suspense fallback={null}>
+                  <group position={gamePosition}>
+                    <IceFloe />
+                    <Penguin />
+                    {!isGameOver && <Fish position={fishPosition} onCollect={collectFish} />}
+                  </group>
+                </Suspense>
               )}
-            </group>
-          </Suspense>
-
+            </>
+          )}
         </XR>
       </Canvas>
     </div>

@@ -1,19 +1,20 @@
 import "./App.css";
-import * as THREE from "three";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { XR, ARButton, Interactive, useHitTest } from "@react-three/xr";
-import { useGLTF, useAnimations } from "@react-three/drei";
+import { useGLTF } from "@react-three/drei";
 import { useRef, useEffect, useState, Suspense } from "react";
 
+// ==========================================
+// MATH HELPER: RANDOM SPAWN GENERATOR
+// ==========================================
 const getRandomSpawnPosition = () => {
   const angle = Math.random() * Math.PI * 2; 
-  // Spawns the fish within the boundaries of the ice floe (0.3m to 0.8m away)
-  const radius = 0.3 + Math.random() * 0.5; 
-  return [Math.cos(angle) * radius, 0.05, Math.sin(angle) * radius]; 
+  const radius = 0.4 + Math.random() * 0.8; 
+  return [Math.cos(angle) * radius, 0.25, Math.sin(angle) * radius];
 };
 
 // ==========================================
-// 1. THE ENVIRONMENT & TARGETING
+// 1. THE RETICLE (TARGETING RING)
 // ==========================================
 function Reticle({ onPlace }) {
   const reticleRef = useRef();
@@ -50,96 +51,63 @@ function Reticle({ onPlace }) {
   );
 }
 
-// NEW: The Ice Stage
+// ==========================================
+// 2. GAME COMPONENTS (MODELS)
+// ==========================================
+useGLTF.preload("/models/penguin.glb");
+useGLTF.preload("/models/fish.glb"); 
+useGLTF.preload("/models/ice_floe.glb"); 
+
+// NEW: The Ice Base Component
 function IceFloe() {
-  const { scene } = useGLTF("/models/ice_base.glb"); // UPDATE FILENAME IF NEEDED
-  return <primitive object={scene} position={[0, -0.05, 0]} scale={1} />;
-}
-
-
-// ==========================================
-// 2. THE ACTORS (PENGUIN & FISH)
-// ==========================================
-function Penguin({ fishPosition, isGameOver }) {
-  const group = useRef();
-  const { scene, animations } = useGLTF("/models/penguin.glb");
-  const { actions } = useAnimations(animations, group);
-  
-  const footsteps = useRef(new Audio("/audios/snow_footsteps.mp3"));
-
-  useEffect(() => {
-    footsteps.current.loop = true;
-    footsteps.current.volume = 0.4;
-    return () => {
-      footsteps.current.pause();
-    };
-  }, []);
-
-  useFrame((state, delta) => {
-    if (!group.current || isGameOver) return;
-
-    // 1. Where is the fish?
-    const target = new THREE.Vector3(fishPosition[0], 0, fishPosition[2]);
-    const currentPos = group.current.position;
-    
-    // 2. How far away is it?
-    const distance = currentPos.distanceTo(target);
-
-    // Get animation names dynamically (in case they are named differently in Blender)
-    const animNames = Object.keys(actions);
-    const walkAnim = actions["Walk"] || actions[animNames[1]]; // Guesses the 2nd animation is walk
-    const idleAnim = actions["Idle"] || actions[animNames[0]]; // Guesses the 1st animation is idle
-
-    if (distance > 0.15) {
-      // THE CHASE: Turn to face the fish and walk towards it
-      group.current.lookAt(target);
-      group.current.position.lerp(target, 1.5 * delta); // The 1.5 is the walking speed
-
-      // Play walk animation, stop idle
-      if (idleAnim) idleAnim.stop();
-      if (walkAnim && !walkAnim.isRunning()) walkAnim.play();
-      
-      // Play footsteps
-      if (footsteps.current.paused) footsteps.current.play().catch(() => {});
-      
-    } else {
-      // THE STOP: We reached the fish!
-      if (walkAnim) walkAnim.stop();
-      if (idleAnim && !idleAnim.isRunning()) idleAnim.play();
-      
-      // Pause footsteps
-      if (!footsteps.current.paused) footsteps.current.pause();
-    }
-  });
-
-  return <primitive ref={group} object={scene} scale={0.5} position={[0, 0, 0]} />;
-}
-
-function Fish({ position, onCollect }) {
-  const group = useRef();
-  const { scene, animations } = useGLTF("/models/fish.glb"); // UPDATE FILENAME IF NEEDED
-  const { actions } = useAnimations(animations, group);
-
-  useEffect(() => {
-    // Automatically play the fish's wiggling/swimming animation
-    const animNames = Object.keys(actions);
-    if (animNames.length > 0) {
-      actions[animNames[0]].play();
-    }
-  }, [actions]);
-
+  const ice = useGLTF("/models/ice_floe.glb");
   return (
-    <Interactive onSelect={onCollect}>
-      <primitive ref={group} object={scene} position={position} scale={0.05} />
-    </Interactive>
+    <primitive 
+      object={ice.scene} 
+      scale={1} // <-- Tweak this just like you did with the fish!
+      position={[0, -0.05, 0]} // Placed slightly below 0 so the penguin stands ON it, not IN it
+    />
   );
 }
 
-// PRELOAD ASSETS
-useGLTF.preload("/models/penguin.glb");
-useGLTF.preload("/models/fish.glb");
-useGLTF.preload("/models/ice_base.glb");
+function Penguin() {
+  const group = useRef();
+  const penguin = useGLTF("/models/penguin.glb");
 
+  useFrame((state) => {
+    if (group.current) {
+      group.current.rotation.y = Math.sin(state.clock.elapsedTime) * 0.5;
+    }
+  });
+
+  return (
+    <primitive
+      ref={group}
+      object={penguin.scene}
+      scale={0.5}
+      position={[0, 0, 0]}
+    />
+  );
+}
+
+function Fish({ position, onCollect }) {
+  const ref = useRef();
+  const fish = useGLTF("/models/fish.glb");
+
+  useFrame(() => {
+    if (ref.current) {
+      ref.current.rotation.y += 0.02;
+    }
+  });
+
+  return (
+    <Interactive onSelect={onCollect}>
+      <group ref={ref} position={position}>
+        <primitive object={fish.scene} scale={0.005} />
+      </group>
+    </Interactive>
+  );
+}
 
 // ==========================================
 // 3. MAIN APP
@@ -147,28 +115,40 @@ useGLTF.preload("/models/ice_base.glb");
 export default function App() {
   const [overlayElement, setOverlayElement] = useState(null);
   const [gamePosition, setGamePosition] = useState(null); 
-  const [fishPosition, setFishPosition] = useState([0.4, 0.05, 0.4]);
+  const [fishPosition, setFishPosition] = useState([0.5, 0.25, 0.5]);
   
   const [score, setScore] = useState(0);
   const [timeLeft, setTimeLeft] = useState(30);
   const [isGameOver, setIsGameOver] = useState(false);
 
+  // Audio Refs
   const ambience = useRef(null);
   const collect = useRef(null);
+  const footsteps = useRef(null);
 
   useEffect(() => {
     ambience.current = new Audio("/audios/antarctic_ambience.mp3");
     ambience.current.loop = true;
-    ambience.current.volume = 0.2; // Lowered slightly so we can hear footsteps
+    ambience.current.volume = 0.3;
 
     collect.current = new Audio("/audios/fish_collect.mp3");
-    collect.current.volume = 0.8;
+    
+    footsteps.current = new Audio("/audios/snow_footsteps.mp3");
+    footsteps.current.volume = 0.5;
 
     return () => {
-      if (ambience.current) ambience.current.pause();
+      if (ambience.current) {
+        ambience.current.pause();
+        ambience.current = null;
+      }
+      if (footsteps.current) {
+        footsteps.current.pause();
+        footsteps.current = null;
+      }
     };
   }, []);
 
+  // Timer Engine
   useEffect(() => {
     let timer;
     if (gamePosition && timeLeft > 0 && !isGameOver) {
@@ -178,18 +158,25 @@ export default function App() {
     } else if (timeLeft === 0 && !isGameOver) {
       setIsGameOver(true);
     }
+    
     return () => clearInterval(timer);
   }, [gamePosition, timeLeft, isGameOver]);
-
 
   const collectFish = () => {
     if (isGameOver) return; 
 
     setScore((s) => s + 1);
+    
     if (collect.current) {
       collect.current.currentTime = 0;
       collect.current.play().catch((e) => console.log(e));
     }
+
+    if (footsteps.current) {
+      footsteps.current.currentTime = 0;
+      footsteps.current.play().catch((e) => console.log(e));
+    }
+
     setFishPosition(getRandomSpawnPosition());
   };
 
@@ -236,6 +223,7 @@ export default function App() {
           <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.85)", zIndex: 50, color: "white", pointerEvents: "auto" }}>
             <h1 style={{ fontSize: "45px", marginBottom: "10px", textShadow: "2px 2px 10px rgba(0,0,0,1)", color: "#10b981" }}>TIME'S UP!</h1>
             <p style={{ fontSize: "22px", marginBottom: "40px" }}>You fed ICY <b>{score}</b> fish!</p>
+            
             <button
               onClick={stopGame}
               style={{ padding: "15px 35px", fontSize: "18px", fontWeight: "bold", borderRadius: "30px", border: "none", background: "#2B4BAA", color: "white", cursor: "pointer", boxShadow: "0 4px 15px rgba(0,0,0,0.5)" }}
@@ -244,6 +232,7 @@ export default function App() {
             </button>
           </div>
         )}
+
       </div>
 
       {overlayElement && (
@@ -268,16 +257,16 @@ export default function App() {
 
       <Canvas style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}>
         <XR>
-          <ambientLight intensity={1.5} />
-          <directionalLight position={[10, 10, 5]} intensity={1} />
+          <ambientLight intensity={2} />
           
           {!gamePosition ? (
             <Reticle onPlace={setGamePosition} />
           ) : (
             <Suspense fallback={null}>
               <group position={gamePosition}>
+                {/* NEW: The Ice Base rendered under everything else */}
                 <IceFloe />
-                <Penguin fishPosition={fishPosition} isGameOver={isGameOver} />
+                <Penguin />
                 {!isGameOver && (
                   <Fish position={fishPosition} onCollect={collectFish} />
                 )}

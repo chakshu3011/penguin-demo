@@ -1,9 +1,8 @@
 import "./App.css";
-import { Canvas, useFrame } from "@react-three/fiber";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { XR, ARButton, Interactive, useHitTest } from "@react-three/xr";
 import { useGLTF } from "@react-three/drei";
 import { useRef, useEffect, useState, Suspense } from "react";
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
 
 const getRandomSpawnPosition = () => {
   const angle = Math.random() * Math.PI * 2; 

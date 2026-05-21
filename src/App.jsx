@@ -130,7 +130,7 @@ function Fish({ position, onCollect }) {
 
   return (
     <Interactive onSelect={onCollect}>
-      <primitive ref={group} object={scene} position={position} scale={0.3} />
+      <primitive ref={group} object={scene} position={position} scale={0.05} />
     </Interactive>
   );
 }
@@ -138,7 +138,7 @@ function Fish({ position, onCollect }) {
 // PRELOAD ASSETS
 useGLTF.preload("/models/penguin.glb");
 useGLTF.preload("/models/fish.glb");
-useGLTF.preload("/models/ice_floes.glb");
+useGLTF.preload("/models/ice_base.glb");
 
 
 // ==========================================

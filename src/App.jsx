@@ -33,7 +33,8 @@ const GAME_SIZES = {
     iceModelScale: 0.09,
     iceGroundRadius: 1.9,
     penguinScale: 0.9,
-    fishScale: 0.0075, // Used for Fish, Krill, and Plastic
+    itemSize: 0.18, // Clean uniform scale for all interactables
+    plasticSize: 0.2,
     fishY: 0.34,
     fishMinRadius: 0.65,
     fishMaxRadius: 1.35,
@@ -43,15 +44,37 @@ const GAME_SIZES = {
     iceGroundRadius: 0.82,
     iceModelScale: 0.12,
     penguinScale: 0.78,
-    fishScale: 0.011,
+    itemSize: 0.18,
+    plasticSize: 0.2,
     fishMinRadius: 0.32,
     fishMaxRadius: 0.58,
     fishZ: 0.18,
   },
 };
 
+const ITEM_CONFIG = {
+  fish: {
+    label: "Fish",
+    icon: "🐟",
+    model: "/models/fish.glb",
+    color: "#38bdf8",
+  },
+  krill: {
+    label: "Krill",
+    icon: "🦐",
+    model: "/models/krill_antartic.glb",
+    color: "#fb7185",
+  },
+  plastic: {
+    label: "Plastic Bottle",
+    icon: "🧴",
+    model: "/models/plastic_water_bottle.glb",
+    color: "#facc15",
+  },
+};
+
 // ======================================================
-// DEVICE HELPERS & SPAWNING LOGIC
+// DEVICE HELPERS
 // ======================================================
 
 const isIOSDevice = () => {
@@ -64,7 +87,7 @@ const isIOSDevice = () => {
   );
 };
 
-// 45% Fish, 37% Krill, 18% Plastic
+// Spawn math matching 45% Fish, 37% Krill, 18% Plastic
 function getRandomItemType() {
   const random = Math.random();
   if (random < 0.45) return "fish";
@@ -74,7 +97,6 @@ function getRandomItemType() {
 
 const getRandomAndroidFishPosition = () => {
   const settings = GAME_SIZES.android;
-
   const angle = Math.random() * Math.PI * 2;
   const radius =
     settings.fishMinRadius +
@@ -89,7 +111,6 @@ const getRandomAndroidFishPosition = () => {
 
 const getRandomMindARFishPosition = () => {
   const settings = GAME_SIZES.mindar;
-
   const angle = Math.random() * Math.PI * 2;
   const radius =
     settings.fishMinRadius +
@@ -101,6 +122,28 @@ const getRandomMindARFishPosition = () => {
     settings.fishZ
   );
 };
+
+function normalizeModelToSize(scene, targetSize) {
+  const clone = scene.clone(true);
+  const box = new THREE.Box3().setFromObject(clone);
+
+  const size = new THREE.Vector3();
+  const center = new THREE.Vector3();
+
+  box.getSize(size);
+  box.getCenter(center);
+
+  const maxAxis = Math.max(size.x, size.y, size.z);
+  const scale = maxAxis > 0 ? targetSize / maxAxis : 0.002; // Safety fallback
+
+  clone.position.sub(center);
+  clone.scale.setScalar(scale);
+
+  const group = new THREE.Group();
+  group.add(clone);
+
+  return group;
+}
 
 // ======================================================
 // MODEL PRELOADS FOR ANDROID WEBXR
@@ -264,56 +307,46 @@ function Penguin() {
 }
 
 // ======================================================
-// ANDROID WEBXR DYNAMIC ITEMS
+// ANDROID WEBXR DYNAMIC ITEMS (Safely Normalized!)
 // ======================================================
 
 function AndroidItem({ item, onCollect }) {
   const ref = useRef();
-  const fish = useGLTF("/models/fish.glb");
-  const krill = useGLTF("/models/krill_antartic.glb");
-  const plastic = useGLTF("/models/plastic_water_bottle.glb");
+  const config = ITEM_CONFIG[item.type];
+  const gltf = useGLTF(config.model);
+  const { actions, names } = useAnimations(gltf.animations, ref);
 
-  const { actions, names } = useAnimations(
-    item.type === "krill" ? krill.animations : [],
-    ref
-  );
+  const finalSize = item.type === "plastic" ? GAME_SIZES.android.plasticSize : GAME_SIZES.android.itemSize;
+  const model = useMemo(() => normalizeModelToSize(gltf.scene, finalSize), [gltf.scene, finalSize, item.id]);
 
   useEffect(() => {
-    if (item.type === "krill" && names && names.length > 0) {
-      const activeAction = actions[names[0]];
-      if (activeAction) {
-        activeAction.reset().play();
-      }
+    if (item.type === "krill" && names && names.length > 0 && actions[names[0]]) {
+      actions[names[0]].reset().play();
     }
   }, [item.type, actions, names]);
 
   useFrame(() => {
     if (ref.current) {
       ref.current.rotation.y += 0.035;
-      ref.current.position.y =
-        item.position[1] + Math.sin(Date.now() * 0.004) * 0.06;
+      ref.current.position.y = item.position[1] + Math.sin(Date.now() * 0.004) * 0.06;
     }
   });
-
-  let sceneToRender = fish.scene;
-  if (item.type === "krill") sceneToRender = krill.scene;
-  if (item.type === "plastic") sceneToRender = plastic.scene;
 
   return (
     <Interactive onSelect={() => onCollect(item.type)}>
       <group ref={ref} position={item.position}>
-        <primitive
-          object={sceneToRender}
-          scale={GAME_SIZES.android.fishScale} // Uses the stable scale for all items
-          position={[0, 0, 0]}
-        />
+        <primitive object={model} position={[0, 0, 0]} />
+        <mesh visible={false}>
+          <sphereGeometry args={[0.24, 24, 24]} />
+          <meshBasicMaterial transparent opacity={0} />
+        </mesh>
       </group>
     </Interactive>
   );
 }
 
 // ======================================================
-// ANDROID WEBXR TRACKER & RETICLE
+// ANDROID WEBXR TRACKER
 // ======================================================
 
 function XRTracker({ onXRStart }) {
@@ -325,6 +358,10 @@ function XRTracker({ onXRStart }) {
 
   return null;
 }
+
+// ======================================================
+// ANDROID WEBXR RETICLE
+// ======================================================
 
 function Reticle({ onPlace }) {
   const reticleRef = useRef();
@@ -369,7 +406,7 @@ function Reticle({ onPlace }) {
 }
 
 // ======================================================
-// CREATE MINDAR ICE GROUND (iOS Unchanged)
+// CREATE MINDAR ICE GROUND
 // ======================================================
 
 function createMindARIceGround() {
@@ -426,7 +463,7 @@ function createMindARIceGround() {
 }
 
 // ======================================================
-// MINDAR MARKER-BASED GAME (iOS Unchanged)
+// MINDAR MARKER-BASED GAME
 // ======================================================
 
 function MindARMarkerGame({
@@ -770,9 +807,12 @@ export default function App() {
 
   const [isXRPresenting, setIsXRPresenting] = useState(false);
   const [androidGamePosition, setAndroidGamePosition] = useState(null);
+  
+  // Dynamic Spawning State
   const [androidItem, setAndroidItem] = useState({
     type: "fish",
     position: getRandomAndroidFishPosition(),
+    id: Date.now()
   });
 
   const [mindARReady, setMindARReady] = useState(false);
@@ -780,12 +820,12 @@ export default function App() {
   const [markerFound, setMarkerFound] = useState(false);
 
   // Unified Game States
-  const [score, setScore] = useState(0); // For iOS
-  const [fishCount, setFishCount] = useState(0); // For Android
-  const [krillCount, setKrillCount] = useState(0); // For Android
-  const [timeLeft, setTimeLeft] = useState(60); 
+  const [score, setScore] = useState(0); 
+  const [fishCount, setFishCount] = useState(0); 
+  const [krillCount, setKrillCount] = useState(0); 
+  const [timeLeft, setTimeLeft] = useState(60);
   const [isGameOver, setIsGameOver] = useState(false);
-  const [gameResult, setGameResult] = useState(null); // 'win', 'plastic', or 'timeup'
+  const [gameResult, setGameResult] = useState(null);
 
   const ambience = useRef(null);
   const collect = useRef(null);
@@ -928,7 +968,7 @@ export default function App() {
     setIsGameOver(false);
 
     setAndroidGamePosition(null);
-    setAndroidItem({ type: getRandomItemType(), position: getRandomAndroidFishPosition() });
+    setAndroidItem({ type: getRandomItemType(), position: getRandomAndroidFishPosition(), id: Date.now() });
 
     setMindARReady(false);
     setMindARError(null);
@@ -960,7 +1000,7 @@ export default function App() {
     }
   }, [isGameOver]);
 
-  // ANDROID ONLY: Handles Fish, Krill, and Plastic
+  // ANDROID ONLY: Handles Fish, Krill, and Plastic Logic
   const handleAndroidItemCollected = (type) => {
     if (isGameOver) return;
 
@@ -1001,7 +1041,7 @@ export default function App() {
       setKrillCount(newKrill);
     }
 
-    // Win Condition Checks
+    // Win Condition
     if (newFish >= 10 || newKrill >= 5) {
       setIsGameOver(true);
       setGameResult("win");
@@ -1009,10 +1049,11 @@ export default function App() {
       return;
     }
 
-    // Spawn next random item
+    // Spawn next item
     setAndroidItem({
       type: getRandomItemType(),
       position: getRandomAndroidFishPosition(),
+      id: Date.now()
     });
   };
 
@@ -1038,7 +1079,7 @@ export default function App() {
     setGameResult(null);
 
     setAndroidGamePosition(null);
-    setAndroidItem({ type: getRandomItemType(), position: getRandomAndroidFishPosition() });
+    setAndroidItem({ type: getRandomItemType(), position: getRandomAndroidFishPosition(), id: Date.now() });
 
     if (mode === "mindar-marker") {
       setMarkerFound(false);
@@ -1047,7 +1088,7 @@ export default function App() {
     playAmbience();
   };
 
-  // iOS Legacy End Message
+  // iOS Legacy Message
   const getEndMessageIOS = () => {
     if (score === 0) return "ICY is sad and starving! 😭";
     if (score <= 3) return "ICY survived, but is still hungry! 🐟";
@@ -1164,7 +1205,7 @@ export default function App() {
             }}
           >
             {androidCanUseWebXR
-              ? "Android Goal: Collect 10 Fish or 5 Krill to win! Avoid Plastic bottles, they will end the game!"
+              ? "Goal: Collect 10 Fish or 5 Krill to win! If you tap a plastic bottle, the game ends immediately."
               : "Feed the baby penguin by catching fish in augmented reality."}
           </p>
 
@@ -1522,7 +1563,7 @@ export default function App() {
         )}
       </div>
 
-      {/* ANDROID WEBXR START BUTTON */}
+      {/* ANDROID WEBXR START BUTTON - SYNCHRONOUS, NO TIMEOUT! */}
       {androidCanUseWebXR && overlayElement && (
         <ARButton
           sessionInit={{
@@ -1531,12 +1572,9 @@ export default function App() {
             domOverlay: { root: overlayElement },
           }}
           onClick={() => {
-            // FIX: Added timeout to prevent the blank screen AR bug
-            setTimeout(() => {
-              resetGameState();
-              setMode("android-webxr");
-              playAmbience();
-            }, 150);
+            resetGameState();
+            setMode("android-webxr");
+            playAmbience();
           }}
           style={{
             position: "absolute",
@@ -1557,7 +1595,7 @@ export default function App() {
         />
       )}
 
-      {/* ANDROID WEBXR CANVAS */}
+      {/* ANDROID WEBXR CANVAS WITH PERMANENT <XR> WRAPPER */}
       <Canvas
         camera={{
           position: [0, 0, 0],
@@ -1580,37 +1618,36 @@ export default function App() {
           background: "transparent",
         }}
       >
-        {mode === "android-webxr" && (
-          <XR>
-            <XRTracker onXRStart={setIsXRPresenting} />
+        {/* XR must ALWAYS remain in the Canvas tree to prevent the "Double Tap" init crash */}
+        <XR>
+          <XRTracker onXRStart={setIsXRPresenting} />
 
-            {isXRPresenting && (
-              <>
-                <ambientLight intensity={2.5} />
-                <directionalLight position={[0, 4, 3]} intensity={2.2} />
+          {mode === "android-webxr" && isXRPresenting && (
+            <>
+              <ambientLight intensity={2.5} />
+              <directionalLight position={[0, 4, 3]} intensity={2.2} />
 
-                {!androidGamePosition ? (
-                  <Reticle onPlace={setAndroidGamePosition} />
-                ) : (
-                  <Suspense fallback={null}>
-                    <group position={androidGamePosition}>
-                      <BigIceGround android />
-                      <IceFloe />
-                      <Penguin />
+              {!androidGamePosition ? (
+                <Reticle onPlace={setAndroidGamePosition} />
+              ) : (
+                <Suspense fallback={null}>
+                  <group position={androidGamePosition}>
+                    <BigIceGround android />
+                    <IceFloe />
+                    <Penguin />
 
-                      {!isGameOver && (
-                        <AndroidItem
-                          item={androidItem}
-                          onCollect={handleAndroidItemCollected}
-                        />
-                      )}
-                    </group>
-                  </Suspense>
-                )}
-              </>
-            )}
-          </XR>
-        )}
+                    {!isGameOver && (
+                      <AndroidItem
+                        item={androidItem}
+                        onCollect={handleAndroidItemCollected}
+                      />
+                    )}
+                  </group>
+                </Suspense>
+              )}
+            </>
+          )}
+        </XR>
       </Canvas>
     </div>
   );

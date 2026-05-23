@@ -17,41 +17,40 @@ import {
   useCallback,
 } from "react";
 import * as THREE from "three";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-
+ 
 // ======================================================
-// GLOBAL SETTINGS
+// STABLE VERSION
+// Android = WebXR floor AR
+// iOS / unsupported Android = camera AR style game
 // ======================================================
-
-const MINDAR_SCRIPT =
-  "https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-three.prod.js";
-
-const TARGET_SRC = "/targets/icy-marker.mind";
-
+ 
+const GAME_TIME = 60;
+const FISH_GOAL = 10;
+const KRILL_GOAL = 5;
+ 
 const GAME_SIZES = {
   android: {
-    iceModelScale: 0.09,
-    iceGroundRadius: 1.9,
-    penguinScale: 0.9,
-    itemSize: 0.18, // Clean uniform scale for all interactables
-    plasticSize: 0.2,
-    fishY: 0.34,
-    fishMinRadius: 0.65,
-    fishMaxRadius: 1.35,
-  },
-
-  mindar: {
-    iceGroundRadius: 0.82,
-    iceModelScale: 0.12,
-    penguinScale: 0.78,
+    iceRadius: 2.3,
+    iceModelSize: 0.8,
+    penguinSize: 0.7,
     itemSize: 0.18,
     plasticSize: 0.2,
-    fishMinRadius: 0.32,
-    fishMaxRadius: 0.58,
-    fishZ: 0.18,
+    minRadius: 0.85,
+    maxRadius: 2.0,
+    itemY: 0.28,
+  },
+  ios: {
+    iceRadius: 1.35,
+    iceModelSize: 0.55,
+    penguinSize: 0.52,
+    itemSize: 0.18,
+    plasticSize: 0.2,
+    minRadius: 0.5,
+    maxRadius: 1.05,
+    itemY: 0.22,
   },
 };
-
+ 
 const ITEM_CONFIG = {
   fish: {
     label: "Fish",
@@ -72,288 +71,349 @@ const ITEM_CONFIG = {
     color: "#facc15",
   },
 };
-
+ 
 // ======================================================
-// DEVICE HELPERS
+// HELPERS
 // ======================================================
-
+ 
 const isIOSDevice = () => {
   if (typeof window === "undefined") return false;
-
+ 
   return (
     /iPad|iPhone|iPod/.test(window.navigator.userAgent) ||
     (window.navigator.platform === "MacIntel" &&
       window.navigator.maxTouchPoints > 1)
   );
 };
-
-// Spawn math matching 45% Fish, 37% Krill, 18% Plastic
+ 
 function getRandomItemType() {
   const random = Math.random();
+ 
   if (random < 0.45) return "fish";
   if (random < 0.82) return "krill";
   return "plastic";
 }
-
-const getRandomAndroidFishPosition = () => {
-  const settings = GAME_SIZES.android;
+ 
+function getRandomPosition(mode) {
+  const s = mode === "android" ? GAME_SIZES.android : GAME_SIZES.ios;
+ 
   const angle = Math.random() * Math.PI * 2;
-  const radius =
-    settings.fishMinRadius +
-    Math.random() * (settings.fishMaxRadius - settings.fishMinRadius);
-
-  return [
-    Math.cos(angle) * radius,
-    settings.fishY,
-    Math.sin(angle) * radius,
-  ];
-};
-
-const getRandomMindARFishPosition = () => {
-  const settings = GAME_SIZES.mindar;
-  const angle = Math.random() * Math.PI * 2;
-  const radius =
-    settings.fishMinRadius +
-    Math.random() * (settings.fishMaxRadius - settings.fishMinRadius);
-
-  return new THREE.Vector3(
-    Math.cos(angle) * radius,
-    Math.sin(angle) * radius,
-    settings.fishZ
-  );
-};
-
+  const radius = s.minRadius + Math.random() * (s.maxRadius - s.minRadius);
+ 
+  return [Math.cos(angle) * radius, s.itemY, Math.sin(angle) * radius];
+}
+ 
+function createTarget(mode = "android") {
+  const type = getRandomItemType();
+ 
+  return {
+    id: `${type}-${Date.now()}-${Math.random()}`,
+    type,
+    androidPosition: getRandomPosition("android"),
+    iosPosition: getRandomPosition("ios"),
+  };
+}
+ 
+function lerpAngle(a, b, t) {
+  const delta = Math.atan2(Math.sin(b - a), Math.cos(b - a));
+  return a + delta * t;
+}
+ 
 function normalizeModelToSize(scene, targetSize) {
   const clone = scene.clone(true);
+ 
   const box = new THREE.Box3().setFromObject(clone);
-
   const size = new THREE.Vector3();
   const center = new THREE.Vector3();
-
+ 
   box.getSize(size);
   box.getCenter(center);
-
+ 
   const maxAxis = Math.max(size.x, size.y, size.z);
-  // FIX: Fallback to 0.0075 instead of 1
-  const scale = maxAxis > 0 ? targetSize / maxAxis : 0.002; 
-
+  const scale = maxAxis > 0 ? targetSize / maxAxis : 1;
+ 
   clone.position.sub(center);
   clone.scale.setScalar(scale);
-
+ 
   const group = new THREE.Group();
   group.add(clone);
-
+ 
   return group;
 }
-
+ 
 // ======================================================
-// MODEL PRELOADS FOR ANDROID WEBXR
+// iOS CAMERA BACKGROUND
 // ======================================================
-
-useGLTF.preload("/models/penguin.glb");
-useGLTF.preload("/models/fish.glb");
-useGLTF.preload("/models/krill_antartic.glb");
-useGLTF.preload("/models/plastic_water_bottle.glb");
-useGLTF.preload("/models/ice_floe.glb");
-
-// ======================================================
-// LOAD MINDAR SCRIPT
-// ======================================================
-
-function loadMindARScript() {
-  return new Promise((resolve, reject) => {
-    if (window.MINDAR && window.MINDAR.IMAGE) {
-      resolve(window.MINDAR.IMAGE.MindARThree);
-      return;
-    }
-
-    const existingScript = document.querySelector(
-      `script[src="${MINDAR_SCRIPT}"]`
-    );
-
-    if (existingScript) {
-      existingScript.addEventListener("load", () => {
-        if (window.MINDAR && window.MINDAR.IMAGE) {
-          resolve(window.MINDAR.IMAGE.MindARThree);
-        } else {
-          reject(new Error("MindAR loaded but not available"));
+ 
+function IOSCameraBackground({ active, onReady, onError }) {
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+ 
+  useEffect(() => {
+    if (!active) return;
+ 
+    let cancelled = false;
+ 
+    async function startCamera() {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error("Camera API is not available");
         }
-      });
-
-      existingScript.addEventListener("error", () => {
-        reject(new Error("Failed to load MindAR script"));
-      });
-
-      return;
+ 
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+          audio: false,
+        });
+ 
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+ 
+        streamRef.current = stream;
+ 
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.setAttribute("playsinline", "true");
+          videoRef.current.setAttribute("webkit-playsinline", "true");
+          videoRef.current.muted = true;
+ 
+          await videoRef.current.play();
+ 
+          onReady();
+        }
+      } catch (error) {
+        console.error("Camera error:", error);
+        onError(error);
+      }
     }
-
-    const script = document.createElement("script");
-    script.src = MINDAR_SCRIPT;
-    script.async = true;
-
-    script.onload = () => {
-      if (window.MINDAR && window.MINDAR.IMAGE) {
-        resolve(window.MINDAR.IMAGE.MindARThree);
-      } else {
-        reject(new Error("MindAR loaded but not available"));
+ 
+    startCamera();
+ 
+    return () => {
+      cancelled = true;
+ 
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
       }
     };
-
-    script.onerror = () => {
-      reject(new Error("Failed to load MindAR script"));
-    };
-
-    document.body.appendChild(script);
-  });
-}
-
-// ======================================================
-// ANDROID WEBXR ICE GROUND
-// ======================================================
-
-function BigIceGround({ android = true }) {
-  const settings = android ? GAME_SIZES.android : GAME_SIZES.mindar;
-
+  }, [active, onReady, onError]);
+ 
+  if (!active) return null;
+ 
   return (
-    <group position={[0, -0.025, 0]}>
+    <video
+      ref={videoRef}
+      muted
+      playsInline
+      autoPlay
+      style={{
+        position: "absolute",
+        inset: 0,
+        width: "100%",
+        height: "100%",
+        objectFit: "cover",
+        zIndex: 1,
+        background: "black",
+      }}
+    />
+  );
+}
+ 
+// ======================================================
+// 3D PARTS
+// ======================================================
+ 
+function IceGround({ mode }) {
+  const s = mode === "android" ? GAME_SIZES.android : GAME_SIZES.ios;
+ 
+  return (
+    <group position={[0, -0.05, 0]}>
       <mesh rotation={[-Math.PI / 2, 0, 0]}>
-        <circleGeometry args={[settings.iceGroundRadius, 96]} />
+        <circleGeometry args={[s.iceRadius, 96]} />
         <meshBasicMaterial
           color="#dff8ff"
           transparent
-          opacity={0.88}
+          opacity={0.82}
           side={THREE.DoubleSide}
         />
       </mesh>
-
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.004, 0]}>
-        <ringGeometry
-          args={[
-            settings.iceGroundRadius * 0.88,
-            settings.iceGroundRadius,
-            96,
-          ]}
-        />
+ 
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.006, 0]}>
+        <ringGeometry args={[s.iceRadius * 0.88, s.iceRadius, 96]} />
         <meshBasicMaterial
           color="#76d7ff"
           transparent
           opacity={0.9}
+          depthWrite={false}
           side={THREE.DoubleSide}
         />
       </mesh>
-
+ 
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.008, 0]}>
-        <ringGeometry
-          args={[
-            settings.iceGroundRadius * 0.32,
-            settings.iceGroundRadius * 0.35,
-            96,
-          ]}
-        />
+        <ringGeometry args={[s.iceRadius * 0.32, s.iceRadius * 0.35, 96]} />
         <meshBasicMaterial
           color="#ffffff"
           transparent
           opacity={0.55}
+          depthWrite={false}
           side={THREE.DoubleSide}
         />
       </mesh>
     </group>
   );
 }
-
-// ======================================================
-// ANDROID WEBXR MODELS
-// ======================================================
-
-function IceFloe() {
-  const ice = useGLTF("/models/ice_floe.glb");
-
-  return (
-    <primitive
-      object={ice.scene}
-      scale={GAME_SIZES.android.iceModelScale}
-      position={[0, -0.01, 0]}
-    />
-  );
+ 
+function NormalizedModel({
+  url,
+  size,
+  position = [0, 0, 0],
+  rotation = [0, 0, 0],
+}) {
+  const gltf = useGLTF(url);
+ 
+  const model = useMemo(() => {
+    return normalizeModelToSize(gltf.scene, size);
+  }, [gltf.scene, size]);
+ 
+  return <primitive object={model} position={position} rotation={rotation} />;
 }
-
-function Penguin() {
-  const group = useRef();
-  const penguin = useGLTF("/models/penguin.glb");
-  const { actions, names } = useAnimations(penguin.animations, group);
-
+ 
+function Penguin({ target, mode }) {
+  const ref = useRef(null);
+  const gltf = useGLTF("/models/penguin.glb");
+  const { actions, names } = useAnimations(gltf.animations, ref);
+ 
+  const s = mode === "android" ? GAME_SIZES.android : GAME_SIZES.ios;
+ 
+  const model = useMemo(() => {
+    return normalizeModelToSize(gltf.scene, s.penguinSize);
+  }, [gltf.scene, s.penguinSize]);
+ 
   useEffect(() => {
     if (names && names.length > 0) {
-      const activeAction = actions[names[0]];
-      if (activeAction) {
-        activeAction.reset().fadeIn(0.25).play();
+      const action = actions[names[0]];
+ 
+      if (action) {
+        action.reset().fadeIn(0.25).play();
       }
     }
   }, [actions, names]);
-
+ 
   useFrame(() => {
-    if (group.current) {
-      group.current.rotation.y += 0.003;
-    }
+    if (!ref.current || !target) return;
+ 
+    const position =
+      mode === "android" ? target.androidPosition : target.iosPosition;
+ 
+    const [x, , z] = position;
+    const desiredAngle = Math.atan2(x, z);
+ 
+    ref.current.rotation.y = lerpAngle(
+      ref.current.rotation.y,
+      desiredAngle,
+      0.07
+    );
   });
-
-  return (
-    <primitive
-      ref={group}
-      object={penguin.scene}
-      scale={GAME_SIZES.android.penguinScale}
-      position={[0, 0.03, 0]}
-    />
-  );
+ 
+  return <primitive ref={ref} object={model} position={[0, 0.03, 0]} />;
 }
-
-// ======================================================
-// ANDROID WEBXR DYNAMIC ITEMS (Safely Normalized!)
-// ======================================================
-
-function AndroidItem({ item, onCollect }) {
-  const ref = useRef();
-  const config = ITEM_CONFIG[item.type];
+ 
+function Collectable({ target, mode, onCollect }) {
+  const ref = useRef(null);
+  const collectedRef = useRef(false);
+ 
+  const config = ITEM_CONFIG[target.type];
   const gltf = useGLTF(config.model);
-
+ 
+  const s = mode === "android" ? GAME_SIZES.android : GAME_SIZES.ios;
+ 
+  const finalSize =
+    target.type === "plastic" ? s.plasticSize : s.itemSize;
+ 
+  const model = useMemo(() => {
+    return normalizeModelToSize(gltf.scene, finalSize);
+  }, [gltf.scene, finalSize, target.id]);
+ 
+  const position =
+    mode === "android" ? target.androidPosition : target.iosPosition;
+ 
+  useEffect(() => {
+    collectedRef.current = false;
+  }, [target.id]);
+ 
+  useFrame(() => {
+    if (!ref.current) return;
+ 
+    ref.current.position.y =
+      position[1] + Math.sin(Date.now() * 0.003) * 0.035;
+ 
+    ref.current.rotation.y += 0.02;
+  });
+ 
+  const handleCollect = useCallback(
+    (event) => {
+      if (event) {
+        event.stopPropagation();
+      }
+ 
+      if (collectedRef.current) return;
+ 
+      collectedRef.current = true;
+      onCollect(target.type);
+    },
+    [onCollect, target.type]
+  );
+ 
+  const content = (
+    <group ref={ref} position={position}>
+      <primitive object={model} />
+ 
+      {/* Invisible larger tap area */}
+      <mesh>
+        <sphereGeometry args={[0.28, 24, 24]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+      </mesh>
+    </group>
+  );
+ 
+  if (mode === "android") {
+    return <Interactive onSelect={handleCollect}>{content}</Interactive>;
+  }
+ 
   return (
-    <Interactive onSelect={() => onCollect(item.type)}>
-      <group ref={ref} position={item.position}>
-        {/* 1. VISIBILITY TEST: MeshBasicMaterial ignores lights so it's always visible */}
-        <primitive object={gltf.scene} scale={0.0075} />
-        
-        {/* 2. DEBUG SPHERE: If you see a red ball but no fish, your model path is wrong */}
-        <mesh position={[0, 0, 0]}>
-          <sphereGeometry args={[0.05]} />
-          <meshBasicMaterial color="red" />
-        </mesh>
-      </group>
-    </Interactive>
+    <group
+      onPointerDown={handleCollect}
+      onClick={(event) => event.stopPropagation()}
+    >
+      {content}
+    </group>
   );
 }
-
+ 
 // ======================================================
-// ANDROID WEBXR TRACKER
+// ANDROID XR
 // ======================================================
-
+ 
 function XRTracker({ onXRStart }) {
   const { isPresenting } = useXR();
-
+ 
   useEffect(() => {
     onXRStart(isPresenting);
   }, [isPresenting, onXRStart]);
-
+ 
   return null;
 }
-
-// ======================================================
-// ANDROID WEBXR RETICLE
-// ======================================================
-
+ 
 function Reticle({ onPlace }) {
-  const reticleRef = useRef();
+  const reticleRef = useRef(null);
   const { camera } = useThree();
-
+ 
   useHitTest((hitMatrix, hit) => {
     if (hit && reticleRef.current) {
       hitMatrix.decompose(
@@ -363,25 +423,25 @@ function Reticle({ onPlace }) {
       );
     }
   });
-
+ 
   return (
     <Interactive
       onSelect={() => {
         if (!reticleRef.current) return;
-
-        const spawnPos = reticleRef.current.position.clone();
-
-        const dirX = spawnPos.x - camera.position.x;
-        const dirZ = spawnPos.z - camera.position.z;
+ 
+        const spawnPosition = reticleRef.current.position.clone();
+ 
+        const dirX = spawnPosition.x - camera.position.x;
+        const dirZ = spawnPosition.z - camera.position.z;
         const distance = Math.sqrt(dirX * dirX + dirZ * dirZ);
-
+ 
         if (distance > 0 && distance < 1.7) {
           const push = 1.7 - distance;
-          spawnPos.x += (dirX / distance) * push;
-          spawnPos.z += (dirZ / distance) * push;
+          spawnPosition.x += (dirX / distance) * push;
+          spawnPosition.z += (dirZ / distance) * push;
         }
-
-        onPlace(spawnPos);
+ 
+        onPlace(spawnPosition);
       }}
     >
       <mesh ref={reticleRef} rotation={[-Math.PI / 2, 0, 0]}>
@@ -391,449 +451,123 @@ function Reticle({ onPlace }) {
     </Interactive>
   );
 }
-
+ 
 // ======================================================
-// CREATE MINDAR ICE GROUND
+// iOS CAMERA GAME SCENE
 // ======================================================
-
-function createMindARIceGround() {
-  const group = new THREE.Group();
-  const settings = GAME_SIZES.mindar;
-
-  const circleGeometry = new THREE.CircleGeometry(settings.iceGroundRadius, 96);
-  const circleMaterial = new THREE.MeshBasicMaterial({
-    color: 0xdff8ff,
-    transparent: true,
-    opacity: 0.88,
-    side: THREE.DoubleSide,
-  });
-
-  const circle = new THREE.Mesh(circleGeometry, circleMaterial);
-  circle.position.set(0, 0, 0);
-  group.add(circle);
-
-  const ringGeometry = new THREE.RingGeometry(
-    settings.iceGroundRadius * 0.88,
-    settings.iceGroundRadius,
-    96
+ 
+function IOSGameScene({ ready, target, isGameOver, onCollect }) {
+  return (
+    <>
+      <ambientLight intensity={2.7} />
+      <directionalLight position={[0, 4, 3]} intensity={2.4} />
+ 
+      {ready && (
+        <Suspense fallback={null}>
+          <group position={[0, -0.95, -2.7]}>
+            <IceGround mode="ios" />
+ 
+            <NormalizedModel
+              url="/models/ice_floe.glb"
+              size={GAME_SIZES.ios.iceModelSize}
+              position={[0, 0.01, 0]}
+            />
+ 
+            <Penguin target={target} mode="ios" />
+ 
+            {!isGameOver && target && (
+              <Collectable
+                key={target.id}
+                target={target}
+                mode="ios"
+                onCollect={onCollect}
+              />
+            )}
+          </group>
+        </Suspense>
+      )}
+    </>
   );
-
-  const ringMaterial = new THREE.MeshBasicMaterial({
-    color: 0x76d7ff,
-    transparent: true,
-    opacity: 0.9,
-    side: THREE.DoubleSide,
-  });
-
-  const ring = new THREE.Mesh(ringGeometry, ringMaterial);
-  ring.position.set(0, 0, 0.004);
-  group.add(ring);
-
-  const innerRingGeometry = new THREE.RingGeometry(
-    settings.iceGroundRadius * 0.32,
-    settings.iceGroundRadius * 0.35,
-    96
-  );
-
-  const innerRingMaterial = new THREE.MeshBasicMaterial({
-    color: 0xffffff,
-    transparent: true,
-    opacity: 0.55,
-    side: THREE.DoubleSide,
-  });
-
-  const innerRing = new THREE.Mesh(innerRingGeometry, innerRingMaterial);
-  innerRing.position.set(0, 0, 0.008);
-  group.add(innerRing);
-
-  return group;
 }
-
+ 
 // ======================================================
-// MINDAR MARKER-BASED GAME
+// SMALL UI
 // ======================================================
-
-function MindARMarkerGame({
-  isActive,
-  targetSrc,
-  isGameOver,
-  onReady,
-  onError,
-  onTrackingChange,
-  onFishCollected,
-}) {
-  const containerRef = useRef(null);
-
-  const mindarRef = useRef(null);
-  const rendererRef = useRef(null);
-  const sceneRef = useRef(null);
-  const cameraRef = useRef(null);
-
-  const fishGroupRef = useRef(null);
-  const fishHitRef = useRef(null);
-  const fishBasePosRef = useRef(new THREE.Vector3());
-  const markerFoundRef = useRef(false);
-
-  const mixerRef = useRef(null);
-  const clockRef = useRef(new THREE.Clock());
-
-  const isGameOverRef = useRef(isGameOver);
-  const onFishCollectedRef = useRef(onFishCollected);
-  const onTrackingChangeRef = useRef(onTrackingChange);
-  const onReadyRef = useRef(onReady);
-  const onErrorRef = useRef(onError);
-
-  const lastCollectTimeRef = useRef(0);
-
-  useEffect(() => {
-    isGameOverRef.current = isGameOver;
-  }, [isGameOver]);
-
-  useEffect(() => {
-    onFishCollectedRef.current = onFishCollected;
-  }, [onFishCollected]);
-
-  useEffect(() => {
-    onTrackingChangeRef.current = onTrackingChange;
-  }, [onTrackingChange]);
-
-  useEffect(() => {
-    onReadyRef.current = onReady;
-  }, [onReady]);
-
-  useEffect(() => {
-    onErrorRef.current = onError;
-  }, [onError]);
-
-  const repositionFish = useCallback(() => {
-    const pos = getRandomMindARFishPosition();
-    fishBasePosRef.current.copy(pos);
-
-    if (fishGroupRef.current) {
-      fishGroupRef.current.position.copy(pos);
-    }
-
-    if (fishHitRef.current) {
-      fishHitRef.current.position.copy(pos);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!isActive) return;
-
-    let disposed = false;
-    let pointerHandler = null;
-
-    const setupMindAR = async () => {
-      try {
-        const MindARThree = await loadMindARScript();
-
-        if (disposed || !containerRef.current) return;
-
-        const mindarThree = new MindARThree({
-          container: containerRef.current,
-          imageTargetSrc: targetSrc,
-          uiScanning: "yes",
-          uiLoading: "yes",
-          filterMinCF: 0.0001,
-          filterBeta: 0.001,
-        });
-
-        mindarRef.current = mindarThree;
-
-        const { renderer, scene, camera } = mindarThree;
-        rendererRef.current = renderer;
-        sceneRef.current = scene;
-        cameraRef.current = camera;
-
-        renderer.setClearColor(0x000000, 0);
-        renderer.outputColorSpace = THREE.SRGBColorSpace;
-
-        renderer.domElement.style.position = "absolute";
-        renderer.domElement.style.inset = "0";
-        renderer.domElement.style.width = "100%";
-        renderer.domElement.style.height = "100%";
-        renderer.domElement.style.touchAction = "none";
-
-        const ambientLight = new THREE.HemisphereLight(0xffffff, 0x444444, 2.4);
-        scene.add(ambientLight);
-
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 2.2);
-        directionalLight.position.set(0, 2, 3);
-        scene.add(directionalLight);
-
-        const anchor = mindarThree.addAnchor(0);
-
-        anchor.onTargetFound = () => {
-          markerFoundRef.current = true;
-
-          if (onTrackingChangeRef.current) {
-            onTrackingChangeRef.current(true);
-          }
-        };
-
-        anchor.onTargetLost = () => {
-          markerFoundRef.current = false;
-
-          if (onTrackingChangeRef.current) {
-            onTrackingChangeRef.current(false);
-          }
-        };
-
-        const iceGround = createMindARIceGround();
-        anchor.group.add(iceGround);
-
-        const loader = new GLTFLoader();
-
-        const [iceGltf, penguinGltf, fishGltf] = await Promise.all([
-          loader.loadAsync("/models/ice_floe.glb"),
-          loader.loadAsync("/models/penguin.glb"),
-          loader.loadAsync("/models/fish.glb"),
-        ]);
-
-        if (disposed) return;
-
-        const iceModel = iceGltf.scene;
-        iceModel.scale.setScalar(GAME_SIZES.mindar.iceModelScale);
-        iceModel.position.set(0, 0, 0.025);
-        iceModel.rotation.x = Math.PI / 2;
-        anchor.group.add(iceModel);
-
-        const penguinRoot = new THREE.Group();
-        penguinRoot.position.set(0, -0.03, 0.08);
-        penguinRoot.rotation.x = Math.PI / 2;
-
-        const penguinModel = penguinGltf.scene;
-        penguinModel.scale.setScalar(GAME_SIZES.mindar.penguinScale);
-        penguinRoot.add(penguinModel);
-        anchor.group.add(penguinRoot);
-
-        if (penguinGltf.animations && penguinGltf.animations.length > 0) {
-          const mixer = new THREE.AnimationMixer(penguinModel);
-          mixerRef.current = mixer;
-
-          const action = mixer.clipAction(penguinGltf.animations[0]);
-          action.reset().play();
-        }
-
-        const fishGroup = new THREE.Group();
-        fishGroup.rotation.x = Math.PI / 2;
-
-        const fishModel = fishGltf.scene;
-        fishModel.scale.setScalar(GAME_SIZES.mindar.fishScale);
-        fishGroup.add(fishModel);
-
-        anchor.group.add(fishGroup);
-        fishGroupRef.current = fishGroup;
-
-        const fishHitGeometry = new THREE.SphereGeometry(0.18, 24, 24);
-        const fishHitMaterial = new THREE.MeshBasicMaterial({
-          color: 0xff0000,
-          transparent: true,
-          opacity: 0,
-          depthWrite: false,
-        });
-
-        const fishHit = new THREE.Mesh(fishHitGeometry, fishHitMaterial);
-        fishHit.name = "fish-hit-target";
-        anchor.group.add(fishHit);
-        fishHitRef.current = fishHit;
-
-        repositionFish();
-
-        const raycaster = new THREE.Raycaster();
-        const pointer = new THREE.Vector2();
-
-        pointerHandler = (event) => {
-          if (!rendererRef.current || !cameraRef.current) return;
-          if (!fishHitRef.current) return;
-          if (isGameOverRef.current) return;
-          if (!markerFoundRef.current) return;
-
-          event.preventDefault();
-
-          const now = Date.now();
-
-          if (now - lastCollectTimeRef.current < 250) {
-            return;
-          }
-
-          const rect = rendererRef.current.domElement.getBoundingClientRect();
-
-          pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-          pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-
-          raycaster.setFromCamera(pointer, cameraRef.current);
-
-          const hits = raycaster.intersectObject(fishHitRef.current, true);
-
-          if (hits.length > 0) {
-            lastCollectTimeRef.current = now;
-
-            if (onFishCollectedRef.current) {
-              onFishCollectedRef.current();
-            }
-
-            repositionFish();
-          }
-        };
-
-        renderer.domElement.addEventListener("pointerdown", pointerHandler, {
-          passive: false,
-        });
-
-        await mindarThree.start();
-
-        if (onReadyRef.current) {
-          onReadyRef.current();
-        }
-
-        renderer.setAnimationLoop(() => {
-          const delta = clockRef.current.getDelta();
-
-          if (mixerRef.current) {
-            mixerRef.current.update(delta);
-          }
-
-          if (penguinRoot) {
-            penguinRoot.rotation.z += 0.004;
-          }
-
-          if (fishGroupRef.current && fishHitRef.current) {
-            const base = fishBasePosRef.current;
-            const floatingZ =
-              base.z + Math.sin(Date.now() * 0.004) * 0.035;
-
-            fishGroupRef.current.position.set(base.x, base.y, floatingZ);
-            fishHitRef.current.position.set(base.x, base.y, floatingZ);
-
-            fishGroupRef.current.rotation.z += 0.045;
-          }
-
-          renderer.render(scene, camera);
-        });
-      } catch (error) {
-        console.error("MindAR setup error:", error);
-
-        if (onErrorRef.current) {
-          onErrorRef.current(error);
-        }
-      }
-    };
-
-    setupMindAR();
-
-    return () => {
-      disposed = true;
-
-      try {
-        if (rendererRef.current && pointerHandler) {
-          rendererRef.current.domElement.removeEventListener(
-            "pointerdown",
-            pointerHandler
-          );
-        }
-
-        if (rendererRef.current) {
-          rendererRef.current.setAnimationLoop(null);
-        }
-
-        if (mindarRef.current) {
-          mindarRef.current.stop();
-        }
-
-        markerFoundRef.current = false;
-
-        if (onTrackingChangeRef.current) {
-          onTrackingChangeRef.current(false);
-        }
-      } catch (error) {
-        console.log("MindAR cleanup error:", error);
-      }
-
-      mindarRef.current = null;
-      rendererRef.current = null;
-      sceneRef.current = null;
-      cameraRef.current = null;
-      fishGroupRef.current = null;
-      fishHitRef.current = null;
-      mixerRef.current = null;
-    };
-  }, [isActive, targetSrc, repositionFish]);
-
-  if (!isActive) return null;
-
+ 
+function InfoBox({ text }) {
   return (
     <div
-      ref={containerRef}
       style={{
         position: "absolute",
-        inset: 0,
-        width: "100%",
-        height: "100%",
-        overflow: "hidden",
-        zIndex: 1,
-        background: "black",
+        left: "50%",
+        bottom: "90px",
+        transform: "translateX(-50%)",
+        color: "white",
+        background: "rgba(0,0,0,0.62)",
+        border: "1px solid rgba(255,255,255,0.25)",
+        padding: "12px 18px",
+        borderRadius: "18px",
+        fontWeight: "800",
+        textAlign: "center",
+        maxWidth: "330px",
+        lineHeight: 1.4,
+        backdropFilter: "blur(8px)",
       }}
-    />
+    >
+      {text}
+    </div>
   );
 }
-
+ 
 // ======================================================
 // MAIN APP
 // ======================================================
-
+ 
 export default function App() {
   const [overlayElement, setOverlayElement] = useState(null);
-
+ 
   const [isIOS, setIsIOS] = useState(false);
   const [webXRSupported, setWebXRSupported] = useState(false);
   const [supportChecked, setSupportChecked] = useState(false);
-
+ 
   const [mode, setMode] = useState("intro");
-
+  // intro | android-webxr | ios-camera
+ 
   const [isXRPresenting, setIsXRPresenting] = useState(false);
   const [androidGamePosition, setAndroidGamePosition] = useState(null);
-  
-  // Dynamic Spawning State
-  const [androidItem, setAndroidItem] = useState({
-    type: "fish",
-    position: getRandomAndroidFishPosition(),
-    id: Date.now()
-  });
-
-  const [mindARReady, setMindARReady] = useState(false);
-  const [mindARError, setMindARError] = useState(null);
-  const [markerFound, setMarkerFound] = useState(false);
-
-  // Unified Game States
-  const [score, setScore] = useState(0); 
-  const [fishCount, setFishCount] = useState(0); 
-  const [krillCount, setKrillCount] = useState(0); 
-  const [timeLeft, setTimeLeft] = useState(60);
-  const [isGameOver, setIsGameOver] = useState(false);
+ 
+  const [iosCameraReady, setIOSCameraReady] = useState(false);
+  const [iosCameraError, setIOSCameraError] = useState(null);
+ 
+  const [target, setTarget] = useState(() => createTarget("android"));
+ 
+  const [fishCount, setFishCount] = useState(0);
+  const [krillCount, setKrillCount] = useState(0);
+  const [timeLeft, setTimeLeft] = useState(GAME_TIME);
   const [gameResult, setGameResult] = useState(null);
-
+ 
   const ambience = useRef(null);
-  const collect = useRef(null);
+  const collectSound = useRef(null);
   const footsteps = useRef(null);
   const penguinChirp = useRef(null);
-
+ 
+  const isGameOver = Boolean(gameResult);
+ 
   // ======================================================
-  // PLATFORM CHECK
+  // SUPPORT CHECK
   // ======================================================
-
+ 
   useEffect(() => {
     const checkSupport = async () => {
       const ios = isIOSDevice();
       setIsIOS(ios);
-
+ 
       if (typeof navigator !== "undefined" && navigator.xr && !ios) {
         try {
           const supported = await navigator.xr.isSessionSupported(
             "immersive-ar"
           );
-
+ 
           setWebXRSupported(supported);
         } catch (error) {
           console.error("WebXR check failed:", error);
@@ -842,278 +576,226 @@ export default function App() {
       } else {
         setWebXRSupported(false);
       }
-
+ 
       setSupportChecked(true);
     };
-
+ 
     checkSupport();
   }, []);
-
+ 
   // ======================================================
-  // AUDIO SETUP
+  // AUDIO
   // ======================================================
-
+ 
   useEffect(() => {
     ambience.current = new Audio("/audios/antarctic_ambience.mp3");
     ambience.current.loop = true;
     ambience.current.volume = 0.3;
-
-    collect.current = new Audio("/audios/fish_collect.mp3");
-
+ 
+    collectSound.current = new Audio("/audios/fish_collect.mp3");
+    collectSound.current.volume = 0.8;
+ 
     footsteps.current = new Audio("/audios/snow_footsteps.mp3");
-    footsteps.current.volume = 0.5;
-
+    footsteps.current.volume = 0.4;
+ 
     penguinChirp.current = new Audio("/audios/baby_penguin.mp3");
     penguinChirp.current.volume = 1.0;
-
+ 
     return () => {
-      if (ambience.current) ambience.current.pause();
-      if (collect.current) collect.current.pause();
-      if (footsteps.current) footsteps.current.pause();
-      if (penguinChirp.current) penguinChirp.current.pause();
+      ambience.current?.pause();
+      collectSound.current?.pause();
+      footsteps.current?.pause();
+      penguinChirp.current?.pause();
     };
   }, []);
-
-  // ======================================================
-  // GAME ACTIVE CHECK
-  // ======================================================
-
-  const gameIsActive = useMemo(() => {
-    if (mode === "android-webxr") {
-      return isXRPresenting;
-    }
-
-    if (mode === "mindar-marker") {
-      return mindARReady;
-    }
-
-    return false;
-  }, [mode, isXRPresenting, mindARReady]);
-
-  const gameHasStartedForTimer = useMemo(() => {
-    if (mode === "android-webxr") {
-      return Boolean(androidGamePosition);
-    }
-
-    if (mode === "mindar-marker") {
-      return markerFound;
-    }
-
-    return false;
-  }, [mode, androidGamePosition, markerFound]);
-
-  // ======================================================
-  // TIMER
-  // ======================================================
-
-  useEffect(() => {
-    let timer;
-
-    if (gameHasStartedForTimer && timeLeft > 0 && !isGameOver) {
-      timer = setInterval(() => {
-        setTimeLeft((prev) => prev - 1);
-      }, 1000);
-    } else if (timeLeft === 0 && !isGameOver) {
-      setIsGameOver(true);
-      
-      if (mode === "android-webxr") {
-        setGameResult("timeup");
-      }
-
-      if (penguinChirp.current) {
-        penguinChirp.current.currentTime = 0;
-        penguinChirp.current.play().catch((e) => console.log(e));
-      }
-    }
-
-    return () => clearInterval(timer);
-  }, [gameHasStartedForTimer, timeLeft, isGameOver, mode]);
-
-  // ======================================================
-  // GAME ACTIONS
-  // ======================================================
-
-  const playAmbience = () => {
-    if (ambience.current) {
-      ambience.current.play().catch((e) => console.log(e));
-    }
-  };
-
-  const stopAmbience = () => {
+ 
+  const playAmbience = useCallback(() => {
+    ambience.current?.play().catch(() => {});
+  }, []);
+ 
+  const stopAmbience = useCallback(() => {
     if (ambience.current) {
       ambience.current.pause();
       ambience.current.currentTime = 0;
     }
-  };
-
-  const resetGameState = () => {
-    setScore(0);
+  }, []);
+ 
+  const playCollectSound = useCallback(() => {
+    if (collectSound.current) {
+      collectSound.current.currentTime = 0;
+      collectSound.current.play().catch(() => {});
+    }
+ 
+    if (footsteps.current) {
+      footsteps.current.currentTime = 0;
+      footsteps.current.play().catch(() => {});
+    }
+ 
+    window.navigator?.vibrate?.(50);
+  }, []);
+ 
+  // ======================================================
+  // RESET / START / STOP
+  // ======================================================
+ 
+  const resetGameState = useCallback(() => {
     setFishCount(0);
     setKrillCount(0);
+    setTimeLeft(GAME_TIME);
     setGameResult(null);
-    setTimeLeft(60);
-    setIsGameOver(false);
-
+    setTarget(createTarget("android"));
     setAndroidGamePosition(null);
-    setAndroidItem({ type: getRandomItemType(), position: getRandomAndroidFishPosition(), id: Date.now() });
-
-    setMindARReady(false);
-    setMindARError(null);
-    setMarkerFound(false);
-  };
-
-  // iOS ONLY: Handles classic single fish collection
-  const handleFishCollected = useCallback(() => {
-    if (isGameOver) return;
-
-    if (
-      typeof window !== "undefined" &&
-      window.navigator &&
-      window.navigator.vibrate
-    ) {
-      window.navigator.vibrate(50);
-    }
-
-    setScore((s) => s + 1);
-
-    if (collect.current) {
-      collect.current.currentTime = 0;
-      collect.current.play().catch((e) => console.log(e));
-    }
-
-    if (footsteps.current) {
-      footsteps.current.currentTime = 0;
-      footsteps.current.play().catch((e) => console.log(e));
-    }
-  }, [isGameOver]);
-
-  // ANDROID ONLY: Handles Fish, Krill, and Plastic Logic
-  const handleAndroidItemCollected = (type) => {
-    if (isGameOver) return;
-
-    if (
-      typeof window !== "undefined" &&
-      window.navigator &&
-      window.navigator.vibrate
-    ) {
-      window.navigator.vibrate(50);
-    }
-
-    // Plastic = Instant Game Over
-    if (type === "plastic") {
-      setIsGameOver(true);
-      setGameResult("plastic");
-      stopAmbience();
-      return;
-    }
-
-    if (collect.current) {
-      collect.current.currentTime = 0;
-      collect.current.play().catch((e) => console.log(e));
-    }
-
-    if (footsteps.current) {
-      footsteps.current.currentTime = 0;
-      footsteps.current.play().catch((e) => console.log(e));
-    }
-
-    let newFish = fishCount;
-    let newKrill = krillCount;
-
-    if (type === "fish") {
-      newFish += 1;
-      setFishCount(newFish);
-    } else if (type === "krill") {
-      newKrill += 1;
-      setKrillCount(newKrill);
-    }
-
-    // Win Condition
-    if (newFish >= 10 || newKrill >= 5) {
-      setIsGameOver(true);
-      setGameResult("win");
-      stopAmbience();
-      return;
-    }
-
-    // Spawn next item
-    setAndroidItem({
-      type: getRandomItemType(),
-      position: getRandomAndroidFishPosition(),
-      id: Date.now()
-    });
-  };
-
-  const startMindAR = () => {
+    setIOSCameraReady(false);
+    setIOSCameraError(null);
+  }, []);
+ 
+  const startIOSGame = () => {
     resetGameState();
-    setMode("mindar-marker");
+    setMode("ios-camera");
     playAmbience();
   };
-
+ 
   const stopGame = () => {
     stopAmbience();
     resetGameState();
     setIsXRPresenting(false);
     setMode("intro");
   };
-
+ 
   const playAgain = () => {
-    setScore(0);
     setFishCount(0);
     setKrillCount(0);
-    setTimeLeft(60);
-    setIsGameOver(false);
+    setTimeLeft(GAME_TIME);
     setGameResult(null);
-
-    setAndroidGamePosition(null);
-    setAndroidItem({ type: getRandomItemType(), position: getRandomAndroidFishPosition(), id: Date.now() });
-
-    if (mode === "mindar-marker") {
-      setMarkerFound(false);
+    setTarget(createTarget(mode === "ios-camera" ? "ios" : "android"));
+ 
+    if (mode === "android-webxr") {
+      setAndroidGamePosition(null);
     }
-
+ 
     playAmbience();
   };
-
-  // iOS Legacy Message
-  const getEndMessageIOS = () => {
-    if (score === 0) return "ICY is sad and starving! 😭";
-    if (score <= 3) return "ICY survived, but is still hungry! 🐟";
-    if (score <= 7) return "ICY is well-fed and happy! 🐧";
-    return "ICY is stuffed and ready to dance! 🎉";
-  };
-
-  const handleMindARReady = useCallback(() => {
-    setMindARReady(true);
-    setMindARError(null);
-  }, []);
-
-  const handleMindARError = useCallback((error) => {
-    console.error(error);
-    setMindARError(error);
-  }, []);
-
-  const handleMarkerTrackingChange = useCallback((found) => {
-    setMarkerFound(found);
-  }, []);
-
+ 
   // ======================================================
-  // UI FLAGS
+  // TIMER
   // ======================================================
-
+ 
+  const gameHasStartedForTimer = useMemo(() => {
+    if (mode === "android-webxr") {
+      return Boolean(androidGamePosition);
+    }
+ 
+    if (mode === "ios-camera") {
+      return iosCameraReady;
+    }
+ 
+    return false;
+  }, [mode, androidGamePosition, iosCameraReady]);
+ 
+  useEffect(() => {
+    let timer;
+ 
+    if (gameHasStartedForTimer && timeLeft > 0 && !isGameOver) {
+      timer = setInterval(() => {
+        setTimeLeft((prev) => prev - 1);
+      }, 1000);
+    } else if (gameHasStartedForTimer && timeLeft === 0 && !isGameOver) {
+      setGameResult("timeup");
+      stopAmbience();
+ 
+      if (penguinChirp.current) {
+        penguinChirp.current.currentTime = 0;
+        penguinChirp.current.play().catch(() => {});
+      }
+    }
+ 
+    return () => clearInterval(timer);
+  }, [gameHasStartedForTimer, timeLeft, isGameOver, stopAmbience]);
+ 
+  // ======================================================
+  // COLLECT OBJECT
+  // ======================================================
+ 
+  const handleObjectCollected = useCallback(
+    (type) => {
+      if (isGameOver) return;
+ 
+      // Plastic = instant fail
+      if (type === "plastic") {
+        setGameResult("plastic");
+        stopAmbience();
+        return;
+      }
+ 
+      playCollectSound();
+ 
+      let nextFish = fishCount;
+      let nextKrill = krillCount;
+ 
+      if (type === "fish") {
+        nextFish = fishCount + 1;
+        setFishCount(nextFish);
+      }
+ 
+      if (type === "krill") {
+        nextKrill = krillCount + 1;
+        setKrillCount(nextKrill);
+      }
+ 
+      if (nextFish >= FISH_GOAL || nextKrill >= KRILL_GOAL) {
+        setGameResult("win");
+        stopAmbience();
+        return;
+      }
+ 
+      setTarget(createTarget(mode === "ios-camera" ? "ios" : "android"));
+    },
+    [
+      isGameOver,
+      fishCount,
+      krillCount,
+      mode,
+      playCollectSound,
+      stopAmbience,
+    ]
+  );
+ 
+  // ======================================================
+  // UI TEXT
+  // ======================================================
+ 
   const androidCanUseWebXR = supportChecked && webXRSupported && !isIOS;
-
-  const shouldUseMindAR =
-    supportChecked && (isIOS || !webXRSupported || !androidCanUseWebXR);
-
   const showIntro = mode === "intro" && !isXRPresenting;
-
-  const showHUD = gameIsActive || mode === "mindar-marker";
-
-  // ======================================================
-  // RENDER
-  // ======================================================
-
+ 
+  const gameIsActive = useMemo(() => {
+    if (mode === "android-webxr") return isXRPresenting;
+    if (mode === "ios-camera") return true;
+    return false;
+  }, [mode, isXRPresenting]);
+ 
+  const getResultTitle = () => {
+    if (gameResult === "win") return "ICY IS SAFE!";
+    if (gameResult === "plastic") return "OH NO!";
+    if (gameResult === "timeup") return "TIME IS UP!";
+    return "";
+  };
+ 
+  const getResultMessage = () => {
+    if (gameResult === "win") {
+      return `Great job! You helped ICY survive by collecting ${fishCount} fish and ${krillCount} krill.`;
+    }
+ 
+    if (gameResult === "plastic") {
+      return "Plastic pollution is dangerous for penguins. If a penguin eats plastic, it can block the stomach, reduce hunger, cause injury, and even lead to death.";
+    }
+ 
+    if (gameResult === "timeup") {
+      return `ICY needed ${FISH_GOAL} fish or ${KRILL_GOAL} krill within one minute. You collected ${fishCount} fish and ${krillCount} krill. Try again and move faster!`;
+    }
+ 
+    return "";
+  };
+ 
   return (
     <div
       style={{
@@ -1126,17 +808,13 @@ export default function App() {
         userSelect: "none",
       }}
     >
-      {/* MINDAR IOS / MARKER AR */}
-      <MindARMarkerGame
-        isActive={mode === "mindar-marker"}
-        targetSrc={TARGET_SRC}
-        isGameOver={isGameOver}
-        onReady={handleMindARReady}
-        onError={handleMindARError}
-        onTrackingChange={handleMarkerTrackingChange}
-        onFishCollected={handleFishCollected}
+      {/* CAMERA BACKGROUND FOR iOS / CAMERA MODE */}
+      <IOSCameraBackground
+        active={mode === "ios-camera"}
+        onReady={() => setIOSCameraReady(true)}
+        onError={(error) => setIOSCameraError(error)}
       />
-
+ 
       {/* INTRO PAGE */}
       {showIntro && (
         <div
@@ -1157,84 +835,82 @@ export default function App() {
               "radial-gradient(circle at top, rgba(66,153,225,0.35), rgba(7,17,31,0.95))",
           }}
         >
-          <div
-            style={{
-              padding: "12px 20px",
-              borderRadius: "999px",
-              background: "rgba(255,255,255,0.12)",
-              border: "1px solid rgba(255,255,255,0.25)",
-              marginBottom: "18px",
-              fontSize: "14px",
-              letterSpacing: "2px",
-            }}
-          >
-            ANTARCTICA AR EXPERIENCE
-          </div>
-
           <h1
             style={{
               fontSize: "52px",
               marginBottom: "10px",
-              lineHeight: 1,
               textShadow: "0 10px 35px rgba(0,0,0,0.5)",
             }}
           >
             ICY AR
           </h1>
-
+ 
           <p
             style={{
               fontSize: "18px",
-              opacity: 0.88,
-              marginBottom: "28px",
-              maxWidth: "360px",
+              opacity: 0.9,
+              marginBottom: "18px",
+              maxWidth: "370px",
               lineHeight: 1.5,
             }}
           >
-            {androidCanUseWebXR
-              ? "Goal: Collect 10 Fish or 5 Krill to win! If you tap a plastic bottle, the game ends immediately."
-              : "Feed the baby penguin by catching fish in augmented reality."}
+            Help ICY survive by collecting fish and krill. Avoid plastic waste.
           </p>
-
-          {!supportChecked && (
-            <p style={{ opacity: 0.8 }}>Checking AR support...</p>
+ 
+          <p
+            style={{
+              fontSize: "15px",
+              opacity: 0.78,
+              marginBottom: "28px",
+              maxWidth: "380px",
+              lineHeight: 1.5,
+            }}
+          >
+            Goal: collect <b>{FISH_GOAL} fish</b> or{" "}
+            <b>{KRILL_GOAL} krill</b> within one minute. If you tap plastic, the
+            game fails.
+          </p>
+ 
+          {!supportChecked && <p style={{ opacity: 0.8 }}>Checking AR support...</p>}
+ 
+          {supportChecked && isIOS && (
+            <button
+              onClick={startIOSGame}
+              style={{
+                padding: "16px 34px",
+                fontSize: "17px",
+                fontWeight: "bold",
+                borderRadius: "999px",
+                border: "none",
+                background: "linear-gradient(135deg, #ffffff, #b7ecff)",
+                color: "#07111f",
+                cursor: "pointer",
+                boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
+              }}
+            >
+              Start iOS AR Game
+            </button>
           )}
-
-          {shouldUseMindAR && (
-            <>
-              <p
-                style={{
-                  maxWidth: "360px",
-                  fontSize: "15px",
-                  opacity: 0.9,
-                  marginBottom: "24px",
-                  lineHeight: 1.5,
-                }}
-              >
-                iPhone and unsupported browsers use MindAR image tracking. Point
-                your camera at the Antarctica marker to place ICY in the real
-                world.
-              </p>
-
-              <button
-                onClick={startMindAR}
-                style={{
-                  padding: "16px 34px",
-                  fontSize: "17px",
-                  fontWeight: "bold",
-                  borderRadius: "999px",
-                  border: "none",
-                  background: "linear-gradient(135deg, #ffffff, #b7ecff)",
-                  color: "#07111f",
-                  cursor: "pointer",
-                  boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
-                }}
-              >
-                Start Marker AR Game
-              </button>
-            </>
+ 
+          {supportChecked && !isIOS && !androidCanUseWebXR && (
+            <button
+              onClick={startIOSGame}
+              style={{
+                padding: "16px 34px",
+                fontSize: "17px",
+                fontWeight: "bold",
+                borderRadius: "999px",
+                border: "none",
+                background: "linear-gradient(135deg, #ffffff, #b7ecff)",
+                color: "#07111f",
+                cursor: "pointer",
+                boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
+              }}
+            >
+              Start Camera AR Game
+            </button>
           )}
-
+ 
           {androidCanUseWebXR && (
             <p
               style={{
@@ -1245,27 +921,13 @@ export default function App() {
                 lineHeight: 1.5,
               }}
             >
-              On Android, press the AR button below to scan the floor and place
+              On Android, press the AR button below, scan the floor, and place
               ICY.
-            </p>
-          )}
-
-          {mindARError && (
-            <p
-              style={{
-                marginTop: "20px",
-                color: "#fca5a5",
-                maxWidth: "330px",
-                lineHeight: 1.4,
-              }}
-            >
-              MindAR could not start. Please check camera permission and make
-              sure <b>/targets/icy-marker.mind</b> exists.
             </p>
           )}
         </div>
       )}
-
+ 
       {/* HUD */}
       <div
         ref={setOverlayElement}
@@ -1275,7 +937,7 @@ export default function App() {
           width: "100%",
           height: "100%",
           pointerEvents: "none",
-          display: showHUD ? "flex" : "none",
+          display: gameIsActive ? "flex" : "none",
           flexDirection: "column",
           justifyContent: "space-between",
         }}
@@ -1285,8 +947,8 @@ export default function App() {
           style={{
             display: "flex",
             justifyContent: "space-between",
-            gap: "10px",
-            padding: "18px",
+            gap: "8px",
+            padding: "14px",
             width: "100%",
             boxSizing: "border-box",
             alignItems: "flex-start",
@@ -1295,41 +957,38 @@ export default function App() {
           <div
             style={{
               color: "white",
-              fontSize: "18px",
+              fontSize: "15px",
               fontWeight: "900",
-              padding: "10px 16px",
-              borderRadius: "999px",
-              background: "rgba(0,0,0,0.45)",
+              padding: "10px 12px",
+              borderRadius: "18px",
+              background: "rgba(0,0,0,0.52)",
               border: "1px solid rgba(255,255,255,0.25)",
               backdropFilter: "blur(8px)",
-              textShadow: "2px 2px 4px rgba(0,0,0,0.8)",
+              lineHeight: 1.5,
             }}
           >
-            {mode === "android-webxr" ? (
-              <>🐟 {fishCount}/10 &nbsp; 🦐 {krillCount}/5</>
-            ) : (
-              <>🐟 {score}</>
-            )}
+            🐟 {fishCount}/{FISH_GOAL}
+            <br />
+            🦐 {krillCount}/{KRILL_GOAL}
           </div>
-
+ 
           {!isGameOver && (
             <div
               style={{
                 color: timeLeft <= 10 ? "#fb7185" : "white",
-                fontSize: "24px",
+                fontSize: "22px",
                 fontWeight: "900",
-                padding: "10px 16px",
+                padding: "10px 14px",
                 borderRadius: "999px",
-                background: "rgba(0,0,0,0.45)",
+                background: "rgba(0,0,0,0.52)",
                 border: "1px solid rgba(255,255,255,0.25)",
                 backdropFilter: "blur(8px)",
-                textShadow: "2px 2px 4px rgba(0,0,0,0.8)",
               }}
             >
-              ⏱ 00:{timeLeft.toString().padStart(2, "0")}
+              ⏱ {timeLeft}s
             </div>
           )}
-
+ 
           <button
             onClick={stopGame}
             style={{
@@ -1338,7 +997,7 @@ export default function App() {
               fontWeight: "bold",
               borderRadius: "999px",
               border: "1px solid rgba(255,255,255,0.4)",
-              background: "rgba(225,29,72,0.9)",
+              background: "rgba(225,29,72,0.92)",
               color: "white",
               pointerEvents: "auto",
               cursor: "pointer",
@@ -1349,108 +1008,46 @@ export default function App() {
             Exit
           </button>
         </div>
-
-        {/* ANDROID INSTRUCTION */}
+ 
+        {/* STATUS MESSAGES */}
         {mode === "android-webxr" &&
           isXRPresenting &&
           !androidGamePosition && (
-            <div
-              style={{
-                position: "absolute",
-                top: "52%",
-                left: "50%",
-                transform: "translate(-50%, -50%)",
-                color: "white",
-                fontSize: "18px",
-                fontWeight: "bold",
-                textAlign: "center",
-                background: "rgba(0,0,0,0.62)",
-                padding: "14px 22px",
-                borderRadius: "18px",
-                maxWidth: "310px",
-                border: "1px solid rgba(255,255,255,0.25)",
-                backdropFilter: "blur(10px)",
-              }}
-            >
-              Scan the floor and tap the ring to place ICY.
-            </div>
+            <InfoBox text="Scan the floor and tap the white ring to place ICY." />
           )}
-
-        {/* MINDAR INSTRUCTIONS */}
-        {mode === "mindar-marker" && !mindARReady && !mindARError && (
+ 
+        {mode === "ios-camera" && !iosCameraReady && !iosCameraError && (
+          <InfoBox text="Opening camera AR mode..." />
+        )}
+ 
+        {mode === "ios-camera" && iosCameraError && (
+          <InfoBox text="Camera permission blocked. Allow camera access and refresh." />
+        )}
+ 
+        {gameHasStartedForTimer && !isGameOver && target && (
           <div
             style={{
               position: "absolute",
-              top: "52%",
+              bottom: "32px",
               left: "50%",
-              transform: "translate(-50%, -50%)",
+              transform: "translateX(-50%)",
               color: "white",
-              fontSize: "18px",
-              fontWeight: "bold",
+              fontSize: "16px",
+              fontWeight: "900",
               textAlign: "center",
-              background: "rgba(0,0,0,0.7)",
-              padding: "14px 24px",
-              borderRadius: "18px",
-              maxWidth: "320px",
+              background: "rgba(0,0,0,0.58)",
+              padding: "12px 18px",
+              borderRadius: "999px",
+              border: `2px solid ${ITEM_CONFIG[target.type].color}`,
               backdropFilter: "blur(10px)",
+              whiteSpace: "nowrap",
             }}
           >
-            Loading MindAR camera...
+            Tap: {ITEM_CONFIG[target.type].icon}{" "}
+            {ITEM_CONFIG[target.type].label}
           </div>
         )}
-
-        {mode === "mindar-marker" &&
-          mindARReady &&
-          !markerFound &&
-          !isGameOver && (
-            <div
-              style={{
-                position: "absolute",
-                top: "52%",
-                left: "50%",
-                transform: "translate(-50%, -50%)",
-                color: "white",
-                fontSize: "18px",
-                fontWeight: "bold",
-                textAlign: "center",
-                background: "rgba(0,0,0,0.7)",
-                padding: "14px 24px",
-                borderRadius: "18px",
-                maxWidth: "320px",
-                backdropFilter: "blur(10px)",
-                lineHeight: 1.4,
-              }}
-            >
-              Point your camera at the printed Antarctica marker.
-            </div>
-          )}
-
-        {mode === "mindar-marker" &&
-          mindARReady &&
-          markerFound &&
-          !isGameOver && (
-            <div
-              style={{
-                position: "absolute",
-                bottom: "32px",
-                left: "50%",
-                transform: "translateX(-50%)",
-                color: "white",
-                fontSize: "16px",
-                fontWeight: "900",
-                textAlign: "center",
-                background: "rgba(0,0,0,0.5)",
-                padding: "12px 20px",
-                borderRadius: "999px",
-                border: "1px solid rgba(255,255,255,0.25)",
-                backdropFilter: "blur(10px)",
-                whiteSpace: "nowrap",
-              }}
-            >
-              Tap the fish to feed ICY!
-            </div>
-          )}
-
+ 
         {/* GAME OVER */}
         {isGameOver && (
           <div
@@ -1461,75 +1058,41 @@ export default function App() {
               flexDirection: "column",
               alignItems: "center",
               justifyContent: "center",
-              background: "rgba(0,0,0,0.86)",
+              background: "rgba(0,0,0,0.88)",
               zIndex: 50,
               color: "white",
               textAlign: "center",
-              padding: "20px",
+              padding: "22px",
               pointerEvents: "auto",
               backdropFilter: "blur(8px)",
             }}
           >
-            {mode === "android-webxr" ? (
-              <>
-                <h1
-                  style={{
-                    fontSize: "46px",
-                    marginBottom: "10px",
-                    textShadow: "2px 2px 10px rgba(0,0,0,1)",
-                    color: gameResult === "win" ? "#86efac" : gameResult === "plastic" ? "#fb7185" : "#38bdf8",
-                  }}
-                >
-                  {gameResult === "win" ? "ICY IS SAFE!" : gameResult === "plastic" ? "OH NO!" : "TIME'S UP!"}
-                </h1>
-                
-                <p
-                  style={{
-                    fontSize: "20px",
-                    fontWeight: "bold",
-                    marginBottom: "35px",
-                    color: "#a7f3d0",
-                    maxWidth: "330px",
-                    lineHeight: 1.4,
-                  }}
-                >
-                  {gameResult === "win" 
-                    ? `You won! You collected ${fishCount} Fish and ${krillCount} Krill!` 
-                    : gameResult === "plastic" 
-                    ? "You fed ICY plastic! It's extremely dangerous for marine life." 
-                    : `You only got ${fishCount} Fish and ${krillCount} Krill. ICY is still hungry!`}
-                </p>
-              </>
-            ) : (
-              <>
-                <h1
-                  style={{
-                    fontSize: "46px",
-                    marginBottom: "10px",
-                    textShadow: "2px 2px 10px rgba(0,0,0,1)",
-                    color: "#38bdf8",
-                  }}
-                >
-                  TIME&apos;S UP!
-                </h1>
-                <p style={{ fontSize: "22px", marginBottom: "10px" }}>
-                  You fed ICY <b>{score}</b> fish!
-                </p>
-                <p
-                  style={{
-                    fontSize: "20px",
-                    fontWeight: "bold",
-                    marginBottom: "35px",
-                    color: "#a7f3d0",
-                    maxWidth: "330px",
-                    lineHeight: 1.4,
-                  }}
-                >
-                  {getEndMessageIOS()}
-                </p>
-              </>
-            )}
-
+            <h1
+              style={{
+                fontSize: "42px",
+                marginBottom: "14px",
+                color:
+                  gameResult === "win"
+                    ? "#86efac"
+                    : gameResult === "plastic"
+                    ? "#fb7185"
+                    : "#38bdf8",
+              }}
+            >
+              {getResultTitle()}
+            </h1>
+ 
+            <p
+              style={{
+                fontSize: "18px",
+                marginBottom: "22px",
+                maxWidth: "360px",
+                lineHeight: 1.5,
+              }}
+            >
+              {getResultMessage()}
+            </p>
+ 
             <button
               onClick={playAgain}
               style={{
@@ -1544,13 +1107,13 @@ export default function App() {
                 boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
               }}
             >
-              Play Again
+              Restart Game
             </button>
           </div>
         )}
       </div>
-
-      {/* ANDROID WEBXR START BUTTON - SYNCHRONOUS, NO TIMEOUT! */}
+ 
+      {/* ANDROID WEBXR BUTTON */}
       {androidCanUseWebXR && overlayElement && (
         <ARButton
           sessionInit={{
@@ -1581,8 +1144,8 @@ export default function App() {
           }}
         />
       )}
-
-      {/* ANDROID WEBXR CANVAS WITH PERMANENT <XR> WRAPPER */}
+ 
+      {/* 3D CANVAS */}
       <Canvas
         camera={{
           position: [0, 0, 0],
@@ -1600,42 +1163,69 @@ export default function App() {
           inset: 0,
           width: "100%",
           height: "100%",
-          zIndex: mode === "android-webxr" ? 2 : 0,
-          pointerEvents: "none",
+          zIndex: mode === "android-webxr" || mode === "ios-camera" ? 2 : 0,
+          pointerEvents: mode === "ios-camera" ? "auto" : "none",
           background: "transparent",
         }}
       >
-        {/* XR must ALWAYS remain in the Canvas tree to prevent the "Double Tap" init crash */}
-        <XR>
-          <XRTracker onXRStart={setIsXRPresenting} />
-
-          {mode === "android-webxr" && isXRPresenting && (
-            <>
-              <ambientLight intensity={2.5} />
-              <directionalLight position={[0, 4, 3]} intensity={2.2} />
-
-              {!androidGamePosition ? (
-                <Reticle onPlace={setAndroidGamePosition} />
-              ) : (
-                <Suspense fallback={null}>
-                  <group position={androidGamePosition}>
-                    <BigIceGround android />
-                    <IceFloe />
-                    <Penguin />
-
-                    {!isGameOver && (
-                      <AndroidItem
-                        item={androidItem}
-                        onCollect={handleAndroidItemCollected}
+        {/* ANDROID WEBXR SCENE */}
+        {mode === "android-webxr" && (
+          <XR>
+            <XRTracker onXRStart={setIsXRPresenting} />
+ 
+            {isXRPresenting && (
+              <>
+                <ambientLight intensity={2.6} />
+                <directionalLight position={[0, 4, 3]} intensity={2.2} />
+ 
+                {!androidGamePosition ? (
+                  <Reticle onPlace={setAndroidGamePosition} />
+                ) : (
+                  <Suspense fallback={null}>
+                    <group position={androidGamePosition}>
+                      <IceGround mode="android" />
+ 
+                      <NormalizedModel
+                        url="/models/ice_floe.glb"
+                        size={GAME_SIZES.android.iceModelSize}
+                        position={[0, 0.01, 0]}
                       />
-                    )}
-                  </group>
-                </Suspense>
-              )}
-            </>
-          )}
-        </XR>
+ 
+                      <Penguin target={target} mode="android" />
+ 
+                      {!isGameOver && target && (
+                        <Collectable
+                          key={target.id}
+                          target={target}
+                          mode="android"
+                          onCollect={handleObjectCollected}
+                        />
+                      )}
+                    </group>
+                  </Suspense>
+                )}
+              </>
+            )}
+          </XR>
+        )}
+ 
+        {/* iOS / CAMERA AR SCENE */}
+        {mode === "ios-camera" && (
+          <IOSGameScene
+            ready={iosCameraReady}
+            target={target}
+            isGameOver={isGameOver}
+            onCollect={handleObjectCollected}
+          />
+        )}
       </Canvas>
     </div>
   );
 }
+ 
+// Optional preload
+useGLTF.preload("/models/penguin.glb");
+useGLTF.preload("/models/ice_floe.glb");
+useGLTF.preload("/models/fish.glb");
+useGLTF.preload("/models/krill_antartic.glb");
+useGLTF.preload("/models/plastic_water_bottle.glb");

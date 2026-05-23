@@ -20,6 +20,9 @@ import * as THREE from "three";
 
 // ======================================================
 // GLOBAL SETTINGS
+// FINAL STABLE VERSION
+// Android = WebXR floor AR
+// iOS = stable camera AR game mode
 // ======================================================
 
 const GAME_TIME = 60;
@@ -29,8 +32,8 @@ const KRILL_GOAL = 5;
 const GAME_SIZES = {
   android: {
     iceRadius: 2.3,
-    iceModelScale: 0.8,
-    penguinScale: 0.7,
+    iceModelSize: 0.8,
+    penguinSize: 0.7,
     itemSize: 0.18,
     plasticSize: 0.2,
     minRadius: 0.85,
@@ -40,7 +43,7 @@ const GAME_SIZES = {
   ios: {
     iceRadius: 1.35,
     iceModelSize: 0.55,
-    penguinScale: 0.52,
+    penguinSize: 0.52,
     itemSize: 0.18,
     plasticSize: 0.2,
     minRadius: 0.5,
@@ -102,7 +105,7 @@ function getRandomPosition(mode) {
   return [Math.cos(angle) * radius, s.itemY, Math.sin(angle) * radius];
 }
 
-function createTarget() {
+function createTarget(mode = "android") {
   const type = getRandomItemType();
   return {
     id: `${type}-${Date.now()}-${Math.random()}`,
@@ -128,6 +131,7 @@ function normalizeModelToSize(scene, targetSize) {
   box.getCenter(center);
 
   const maxAxis = Math.max(size.x, size.y, size.z);
+  // Using the 0.002 fallback to prevent the giant fish bug
   const scale = maxAxis > 0 ? targetSize / maxAxis : 0.002;
 
   clone.position.sub(center);
@@ -149,6 +153,7 @@ function IOSCameraBackground({ active, onReady, onError }) {
 
   useEffect(() => {
     if (!active) return;
+
     let cancelled = false;
 
     async function startCamera() {
@@ -187,6 +192,7 @@ function IOSCameraBackground({ active, onReady, onError }) {
 
     return () => {
       cancelled = true;
+
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
@@ -239,6 +245,7 @@ function IceGround({ mode }) {
 function NormalizedModel({ url, size, position = [0, 0, 0], rotation = [0, 0, 0] }) {
   const gltf = useGLTF(url);
   const model = useMemo(() => normalizeModelToSize(gltf.scene, size), [gltf.scene, size]);
+
   return <primitive object={model} position={position} rotation={rotation} />;
 }
 
@@ -253,7 +260,9 @@ function Penguin({ target, mode }) {
 
   const s = mode === "android" ? GAME_SIZES.android : GAME_SIZES.ios;
 
-  const model = useMemo(() => normalizeModelToSize(gltf.scene, s.penguinScale), [gltf.scene, s.penguinScale]);
+  const model = useMemo(() => {
+    return normalizeModelToSize(gltf.scene, s.penguinSize);
+  }, [gltf.scene, s.penguinSize]);
 
   useEffect(() => {
     if (names && names.length > 0 && actions[names[0]]) {
@@ -294,11 +303,15 @@ function Collectable({ target, mode, onCollect }) {
   const s = mode === "android" ? GAME_SIZES.android : GAME_SIZES.ios;
   const finalSize = target.type === "plastic" ? s.plasticSize : s.itemSize;
 
-  const model = useMemo(() => normalizeModelToSize(gltf.scene, finalSize), [gltf.scene, finalSize, target.id]);
+  const model = useMemo(() => {
+    return normalizeModelToSize(gltf.scene, finalSize);
+  }, [gltf.scene, finalSize, target.id]);
+
   const position = mode === "android" ? target.androidPosition : target.iosPosition;
 
   useFrame(() => {
     if (!ref.current) return;
+
     ref.current.position.y = position[1] + Math.sin(Date.now() * 0.003) * 0.035;
     ref.current.rotation.y += 0.02;
   });
@@ -321,8 +334,14 @@ function Collectable({ target, mode, onCollect }) {
     <group
       ref={ref}
       position={position}
-      onPointerDown={(event) => { event.stopPropagation(); onCollect(target.type); }}
-      onClick={(event) => { event.stopPropagation(); onCollect(target.type); }}
+      onPointerDown={(event) => {
+        event.stopPropagation();
+        onCollect(target.type);
+      }}
+      onClick={(event) => {
+        event.stopPropagation();
+        onCollect(target.type);
+      }}
     >
       <primitive object={model} />
       <mesh visible={false}>
@@ -339,7 +358,11 @@ function Collectable({ target, mode, onCollect }) {
 
 function XRTracker({ onXRStart }) {
   const { isPresenting } = useXR();
-  useEffect(() => { onXRStart(isPresenting); }, [isPresenting, onXRStart]);
+
+  useEffect(() => {
+    onXRStart(isPresenting);
+  }, [isPresenting, onXRStart]);
+
   return null;
 }
 
@@ -349,7 +372,11 @@ function Reticle({ onPlace }) {
 
   useHitTest((hitMatrix, hit) => {
     if (hit && ref.current) {
-      hitMatrix.decompose(ref.current.position, ref.current.quaternion, ref.current.scale);
+      hitMatrix.decompose(
+        ref.current.position,
+        ref.current.quaternion,
+        ref.current.scale
+      );
     }
   });
 
@@ -357,7 +384,9 @@ function Reticle({ onPlace }) {
     <Interactive
       onSelect={() => {
         if (!ref.current) return;
+
         const spawnPosition = ref.current.position.clone();
+
         const dirX = spawnPosition.x - camera.position.x;
         const dirZ = spawnPosition.z - camera.position.z;
         const distance = Math.sqrt(dirX * dirX + dirZ * dirZ);
@@ -367,6 +396,7 @@ function Reticle({ onPlace }) {
           spawnPosition.x += (dirX / distance) * push;
           spawnPosition.z += (dirZ / distance) * push;
         }
+
         onPlace(spawnPosition);
       }}
     >
@@ -392,10 +422,22 @@ function IOSGameScene({ ready, target, isGameOver, onCollect }) {
         <Suspense fallback={null}>
           <group position={[0, -0.95, -2.7]}>
             <IceGround mode="ios" />
-            <NormalizedModel url="/models/ice_floe.glb" size={GAME_SIZES.ios.iceModelSize} position={[0, 0.01, 0]} />
+
+            <NormalizedModel
+              url="/models/ice_floe.glb"
+              size={GAME_SIZES.ios.iceModelSize}
+              position={[0, 0.01, 0]}
+            />
+
             <Penguin target={target} mode="ios" />
+
             {!isGameOver && target && (
-              <Collectable key={target.id} target={target} mode="ios" onCollect={onCollect} />
+              <Collectable
+                key={target.id}
+                target={target}
+                mode="ios"
+                onCollect={onCollect}
+              />
             )}
           </group>
         </Suspense>
@@ -404,9 +446,30 @@ function IOSGameScene({ ready, target, isGameOver, onCollect }) {
   );
 }
 
+// ======================================================
+// INFO BOX
+// ======================================================
+
 function InfoBox({ text }) {
   return (
-    <div style={{ position: "absolute", top: "52%", left: "50%", transform: "translate(-50%, -50%)", color: "white", fontSize: "18px", fontWeight: "bold", textAlign: "center", background: "rgba(0,0,0,0.72)", padding: "14px 24px", borderRadius: "18px", maxWidth: "330px", backdropFilter: "blur(10px)", lineHeight: 1.4 }}>
+    <div
+      style={{
+        position: "absolute",
+        top: "52%",
+        left: "50%",
+        transform: "translate(-50%, -50%)",
+        color: "white",
+        fontSize: "18px",
+        fontWeight: "bold",
+        textAlign: "center",
+        background: "rgba(0,0,0,0.72)",
+        padding: "14px 24px",
+        borderRadius: "18px",
+        maxWidth: "330px",
+        backdropFilter: "blur(10px)",
+        lineHeight: 1.4,
+      }}
+    >
       {text}
     </div>
   );
@@ -418,18 +481,20 @@ function InfoBox({ text }) {
 
 export default function App() {
   const [overlayElement, setOverlayElement] = useState(null);
+
   const [isIOS, setIsIOS] = useState(false);
   const [webXRSupported, setWebXRSupported] = useState(false);
   const [supportChecked, setSupportChecked] = useState(false);
 
-  const [mode, setMode] = useState("intro");
+  const [mode, setMode] = useState("intro"); // intro | android-webxr | ios-camera
+
   const [isXRPresenting, setIsXRPresenting] = useState(false);
   const [androidGamePosition, setAndroidGamePosition] = useState(null);
 
   const [iosCameraReady, setIOSCameraReady] = useState(false);
   const [iosCameraError, setIOSCameraError] = useState(null);
 
-  const [target, setTarget] = useState(() => createTarget());
+  const [target, setTarget] = useState(() => createTarget("android"));
 
   const [fishCount, setFishCount] = useState(0);
   const [krillCount, setKrillCount] = useState(0);
@@ -442,6 +507,10 @@ export default function App() {
   const penguinChirp = useRef(null);
 
   const isGameOver = Boolean(gameResult);
+
+  // ======================================================
+  // PLATFORM CHECK
+  // ======================================================
 
   useEffect(() => {
     async function checkSupport() {
@@ -460,16 +529,24 @@ export default function App() {
       }
       setSupportChecked(true);
     }
+
     checkSupport();
   }, []);
+
+  // ======================================================
+  // AUDIO
+  // ======================================================
 
   useEffect(() => {
     ambience.current = new Audio("/audios/antarctic_ambience.mp3");
     ambience.current.loop = true;
     ambience.current.volume = 0.25;
+
     collectSound.current = new Audio("/audios/fish_collect.mp3");
+
     footsteps.current = new Audio("/audios/snow_footsteps.mp3");
     footsteps.current.volume = 0.4;
+
     penguinChirp.current = new Audio("/audios/baby_penguin.mp3");
     penguinChirp.current.volume = 0.9;
 
@@ -481,89 +558,155 @@ export default function App() {
     };
   }, []);
 
-  const playAmbience = () => { ambience.current?.play().catch(() => {}); };
-  const stopAmbience = () => { if (ambience.current) { ambience.current.pause(); ambience.current.currentTime = 0; } };
+  const playAmbience = () => {
+    ambience.current?.play().catch(() => {});
+  };
+
+  const stopAmbience = () => {
+    if (ambience.current) {
+      ambience.current.pause();
+      ambience.current.currentTime = 0;
+    }
+  };
 
   const playCollectSound = () => {
-    if (collectSound.current) { collectSound.current.currentTime = 0; collectSound.current.play().catch(() => {}); }
-    if (footsteps.current) { footsteps.current.currentTime = 0; footsteps.current.play().catch(() => {}); }
-    if (window.navigator?.vibrate) window.navigator.vibrate(50);
+    if (collectSound.current) {
+      collectSound.current.currentTime = 0;
+      collectSound.current.play().catch(() => {});
+    }
+
+    if (footsteps.current) {
+      footsteps.current.currentTime = 0;
+      footsteps.current.play().catch(() => {});
+    }
+
+    window.navigator?.vibrate?.(50);
   };
+
+  // ======================================================
+  // RESET & MODES
+  // ======================================================
 
   const resetGameState = () => {
     setFishCount(0);
     setKrillCount(0);
     setTimeLeft(GAME_TIME);
     setGameResult(null);
-    setTarget(createTarget());
+    setTarget(createTarget("android"));
     setAndroidGamePosition(null);
     setIOSCameraReady(false);
     setIOSCameraError(null);
   };
 
-  const startIOSGame = () => { resetGameState(); setMode("ios-camera"); playAmbience(); };
-  const stopGame = () => { stopAmbience(); resetGameState(); setIsXRPresenting(false); setMode("intro"); };
+  const startIOSGame = () => {
+    resetGameState();
+    setMode("ios-camera");
+    playAmbience();
+  };
+
+  const stopGame = () => {
+    stopAmbience();
+    resetGameState();
+    setIsXRPresenting(false);
+    setMode("intro");
+  };
 
   const playAgain = () => {
     setFishCount(0);
     setKrillCount(0);
     setTimeLeft(GAME_TIME);
     setGameResult(null);
-    setTarget(createTarget());
-    if (mode === "android-webxr") setAndroidGamePosition(null);
+    setTarget(createTarget("android"));
+
+    if (mode === "android-webxr") {
+      setAndroidGamePosition(null);
+    }
+
     playAmbience();
   };
 
+  // ======================================================
+  // TIMER
+  // ======================================================
+
   const gameHasStartedForTimer = useMemo(() => {
-    if (mode === "android-webxr") return Boolean(androidGamePosition);
-    if (mode === "ios-camera") return iosCameraReady;
+    if (mode === "android-webxr") {
+      return Boolean(androidGamePosition);
+    }
+
+    if (mode === "ios-camera") {
+      return iosCameraReady;
+    }
+
     return false;
   }, [mode, androidGamePosition, iosCameraReady]);
 
-  // RESTORED TIMER HOOK ENGINE
   useEffect(() => {
     let timer;
+
     if (gameHasStartedForTimer && timeLeft > 0 && !isGameOver) {
-      timer = setInterval(() => { setTimeLeft((prev) => prev - 1); }, 1000);
+      timer = setInterval(() => {
+        setTimeLeft((prev) => prev - 1);
+      }, 1000);
     } else if (timeLeft === 0 && !isGameOver) {
       setGameResult("timeup");
       stopAmbience();
+
       if (penguinChirp.current) {
         penguinChirp.current.currentTime = 0;
         penguinChirp.current.play().catch(() => {});
       }
     }
+
     return () => clearInterval(timer);
   }, [gameHasStartedForTimer, timeLeft, isGameOver]);
 
-  const handleObjectCollected = useCallback((type) => {
-    if (isGameOver) return;
+  // ======================================================
+  // COLLECT
+  // ======================================================
 
-    if (type === "plastic") {
-      setGameResult("plastic");
-      stopAmbience();
-      return;
-    }
+  const handleObjectCollected = useCallback(
+    (type) => {
+      if (isGameOver) return;
 
-    playCollectSound();
-    const nextFish = type === "fish" ? fishCount + 1 : fishCount;
-    const nextKrill = type === "krill" ? krillCount + 1 : krillCount;
+      if (type === "plastic") {
+        setGameResult("plastic");
+        stopAmbience();
+        return;
+      }
 
-    setFishCount(nextFish);
-    setKrillCount(nextKrill);
+      playCollectSound();
 
-    if (nextFish >= FISH_GOAL || nextKrill >= KRILL_GOAL) {
-      setGameResult("win");
-      stopAmbience();
-      return;
-    }
+      const nextFish = type === "fish" ? fishCount + 1 : fishCount;
+      const nextKrill = type === "krill" ? krillCount + 1 : krillCount;
 
-    setTarget(createTarget());
-  }, [isGameOver, fishCount, krillCount]);
+      setFishCount(nextFish);
+      setKrillCount(nextKrill);
+
+      if (nextFish >= FISH_GOAL || nextKrill >= KRILL_GOAL) {
+        setGameResult("win");
+        stopAmbience();
+        return;
+      }
+
+      setTarget(createTarget(mode === "ios-camera" ? "ios" : "android"));
+    },
+    [isGameOver, fishCount, krillCount, mode]
+  );
+
+  // ======================================================
+  // UI LOGIC
+  // ======================================================
 
   const androidCanUseWebXR = supportChecked && webXRSupported && !isIOS;
   const showIntro = mode === "intro" && !isXRPresenting;
-  const gameIsActive = useMemo(() => mode === "android-webxr" ? isXRPresenting : mode === "ios-camera", [mode, isXRPresenting]);
+  const shouldUseIOSFallback = supportChecked && (isIOS || !webXRSupported);
+
+  const gameIsActive = useMemo(() => {
+    if (mode === "android-webxr") return isXRPresenting;
+    if (mode === "ios-camera") return true;
+    return false;
+  }, [mode, isXRPresenting]);
 
   const getResultTitle = () => {
     if (gameResult === "win") return "ICY IS SAFE!";
@@ -573,41 +716,156 @@ export default function App() {
   };
 
   const getResultMessage = () => {
-    if (gameResult === "win") return `Great job! You helped ICY survive by collecting ${fishCount} fish and ${krillCount} krill.`;
-    if (gameResult === "plastic") return "Plastic pollution is dangerous for penguins. If a penguin eats plastic, it can block the stomach, reduce hunger, cause injury, and even lead to death.";
-    if (gameResult === "timeup") return `ICY needed 10 fish or 5 krill within one minute. You collected ${fishCount} fish and ${krillCount} krill. Try again and move faster!`;
+    if (gameResult === "win") {
+      return `Great job! You helped ICY survive by collecting ${fishCount} fish and ${krillCount} krill.`;
+    }
+
+    if (gameResult === "plastic") {
+      return "Plastic pollution is dangerous for penguins. If a penguin eats plastic, it can block the stomach, reduce hunger, cause injury, and even lead to death.";
+    }
+
+    if (gameResult === "timeup") {
+      return `ICY needed 10 fish or 5 krill within one minute. You collected ${fishCount} fish and ${krillCount} krill. Try again and move faster!`;
+    }
+
     return "";
   };
 
   return (
-    <div style={{ width: "100vw", height: "100dvh", overflow: "hidden", position: "relative", backgroundColor: "#07111f", touchAction: "none", userSelect: "none" }}>
-      <IOSCameraBackground active={mode === "ios-camera"} onReady={() => setIOSCameraReady(true)} onError={(error) => setIOSCameraError(error)} />
+    <div
+      style={{
+        width: "100vw",
+        height: "100dvh",
+        overflow: "hidden",
+        position: "relative",
+        backgroundColor: "#07111f",
+        touchAction: "none",
+        userSelect: "none",
+      }}
+    >
+      <IOSCameraBackground
+        active={mode === "ios-camera"}
+        onReady={() => setIOSCameraReady(true)}
+        onError={(error) => setIOSCameraError(error)}
+      />
 
       {showIntro && (
-        <div style={{ position: "absolute", zIndex: 5, width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "white", padding: "24px", boxSizing: "border-box", textAlign: "center", background: "radial-gradient(circle at top, rgba(66,153,225,0.35), rgba(7,17,31,0.95))" }}>
-          <div style={{ padding: "12px 20px", borderRadius: "999px", background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.25)", marginBottom: "18px", fontSize: "14px", letterSpacing: "2px" }}>ANTARCTICA AR EXPERIENCE</div>
-          <h1 style={{ fontSize: "52px", marginBottom: "10px", lineHeight: 1, textShadow: "0 10px 35px rgba(0,0,0,0.5)" }}>ICY AR</h1>
-          <p style={{ fontSize: "18px", opacity: 0.9, marginBottom: "18px", maxWidth: "370px", lineHeight: 1.5 }}>Help ICY survive by collecting fish and krill. Avoid plastic waste.</p>
-          <p style={{ fontSize: "15px", opacity: 0.78, marginBottom: "28px", maxWidth: "380px", lineHeight: 1.5 }}>Goal: collect <b>10 fish</b> or <b>5 krill</b> within one minute. If you tap plastic, the game fails.</p>
-          
+        <div
+          style={{
+            position: "absolute",
+            zIndex: 5,
+            width: "100%",
+            height: "100%",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "white",
+            padding: "24px",
+            boxSizing: "border-box",
+            textAlign: "center",
+            background: "radial-gradient(circle at top, rgba(66,153,225,0.35), rgba(7,17,31,0.95))",
+          }}
+        >
+          <div
+            style={{
+              padding: "12px 20px",
+              borderRadius: "999px",
+              background: "rgba(255,255,255,0.12)",
+              border: "1px solid rgba(255,255,255,0.25)",
+              marginBottom: "18px",
+              fontSize: "14px",
+              letterSpacing: "2px",
+            }}
+          >
+            ANTARCTICA AR EXPERIENCE
+          </div>
+
+          <h1 style={{ fontSize: "52px", marginBottom: "10px", lineHeight: 1, textShadow: "0 10px 35px rgba(0,0,0,0.5)" }}>
+            ICY AR
+          </h1>
+
+          <p style={{ fontSize: "18px", opacity: 0.9, marginBottom: "18px", maxWidth: "370px", lineHeight: 1.5 }}>
+            Help ICY survive by collecting fish and krill. Avoid plastic waste.
+          </p>
+
+          <p style={{ fontSize: "15px", opacity: 0.78, marginBottom: "28px", maxWidth: "380px", lineHeight: 1.5 }}>
+            Goal: collect <b>10 fish</b> or <b>5 krill</b> within one minute. If you tap plastic, the game fails.
+          </p>
+
+          {!supportChecked && <p style={{ opacity: 0.8 }}>Checking AR support...</p>}
+
           {shouldUseIOSFallback && (
-            <button onClick={startIOSGame} style={{ padding: "16px 34px", fontSize: "17px", fontWeight: "bold", borderRadius: "999px", border: "none", background: "linear-gradient(135deg, #ffffff, #b7ecff)", color: "#07111f", cursor: "pointer", boxShadow: "0 10px 30px rgba(0,0,0,0.35)" }}>Start AR Game</button>
+            <button
+              onClick={startIOSGame}
+              style={{
+                padding: "16px 34px",
+                fontSize: "17px",
+                fontWeight: "bold",
+                borderRadius: "999px",
+                border: "none",
+                background: "linear-gradient(135deg, #ffffff, #b7ecff)",
+                color: "#07111f",
+                cursor: "pointer",
+                boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
+              }}
+            >
+              Start AR Game
+            </button>
           )}
-          {androidCanUseWebXR && <p style={{ maxWidth: "360px", fontSize: "15px", opacity: 0.9, marginTop: "16px", lineHeight: 1.5 }}>On Android, press the AR button below, scan the floor, and place ICY.</p>}
+
+          {androidCanUseWebXR && (
+            <p style={{ maxWidth: "360px", fontSize: "15px", opacity: 0.9, marginTop: "16px", lineHeight: 1.5 }}>
+              On Android, press the AR button below, scan the floor, and place ICY.
+            </p>
+          )}
         </div>
       )}
 
-      <div ref={setOverlayElement} style={{ position: "absolute", zIndex: 10, width: "100%", height: "100%", pointerEvents: "none", display: gameIsActive ? "flex" : "none", flexDirection: "column", justifyContent: "space-between" }}>
+      <div
+        ref={setOverlayElement}
+        style={{
+          position: "absolute",
+          zIndex: 10,
+          width: "100%",
+          height: "100%",
+          pointerEvents: "none",
+          display: gameIsActive ? "flex" : "none",
+          flexDirection: "column",
+          justifyContent: "space-between",
+        }}
+      >
         <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", padding: "14px", width: "100%", boxSizing: "border-box", alignItems: "flex-start" }}>
           <div style={{ color: "white", fontSize: "15px", fontWeight: "900", padding: "10px 12px", borderRadius: "18px", background: "rgba(0,0,0,0.52)", border: "1px solid rgba(255,255,255,0.25)", backdropFilter: "blur(8px)", lineHeight: 1.5 }}>
             🐟 {fishCount}/{FISH_GOAL}<br />🦐 {krillCount}/{KRILL_GOAL}
           </div>
-          {!isGameOver && <div style={{ color: timeLeft <= 10 ? "#fb7185" : "white", fontSize: "22px", fontWeight: "900", padding: "10px 14px", borderRadius: "999px", background: "rgba(0,0,0,0.52)", border: "1px solid rgba(255,255,255,0.25)", backdropFilter: "blur(8px)" }}>⏱ {timeLeft}s</div>}
-          <button onClick={stopGame} style={{ padding: "10px 16px", fontSize: "14px", fontWeight: "bold", borderRadius: "999px", border: "1px solid rgba(255,255,255,0.4)", background: "rgba(225,29,72,0.92)", color: "white", pointerEvents: "auto", cursor: "pointer", maxHeight: "44px", backdropFilter: "blur(8px)" }}>Exit</button>
+
+          {!isGameOver && (
+            <div style={{ color: timeLeft <= 10 ? "#fb7185" : "white", fontSize: "22px", fontWeight: "900", padding: "10px 14px", borderRadius: "999px", background: "rgba(0,0,0,0.52)", border: "1px solid rgba(255,255,255,0.25)", backdropFilter: "blur(8px)" }}>
+              ⏱ {timeLeft}s
+            </div>
+          )}
+
+          <button
+            onClick={stopGame}
+            style={{ padding: "10px 16px", fontSize: "14px", fontWeight: "bold", borderRadius: "999px", border: "1px solid rgba(255,255,255,0.4)", background: "rgba(225,29,72,0.92)", color: "white", pointerEvents: "auto", cursor: "pointer", maxHeight: "44px", backdropFilter: "blur(8px)" }}
+          >
+            Exit
+          </button>
         </div>
 
-        {mode === "android-webxr" && isXRPresenting && !androidGamePosition && <InfoBox text="Scan the floor and tap the ring to place ICY." />}
-        {mode === "ios-camera" && !iosCameraReady && !iosCameraError && <InfoBox text="Opening camera AR mode..." />}
+        {mode === "android-webxr" && isXRPresenting && !androidGamePosition && (
+          <InfoBox text="Scan the floor and tap the ring to place ICY." />
+        )}
+
+        {mode === "ios-camera" && !iosCameraReady && !iosCameraError && (
+          <InfoBox text="Opening iOS camera AR mode..." />
+        )}
+
+        {mode === "ios-camera" && iosCameraError && (
+          <InfoBox text="Camera permission blocked. Allow camera access and refresh." />
+        )}
+
         {gameHasStartedForTimer && !isGameOver && target && (
           <div style={{ position: "absolute", bottom: "32px", left: "50%", transform: "translateX(-50%)", color: "white", fontSize: "16px", fontWeight: "900", textAlign: "center", background: "rgba(0,0,0,0.58)", padding: "12px 18px", borderRadius: "999px", border: `2px solid ${ITEM_CONFIG[target.type].color}`, backdropFilter: "blur(10px)", whiteSpace: "nowrap" }}>
             Tap: {ITEM_CONFIG[target.type].icon} {ITEM_CONFIG[target.type].label}
@@ -616,9 +874,18 @@ export default function App() {
 
         {isGameOver && (
           <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.88)", zIndex: 50, color: "white", textAlign: "center", padding: "22px", pointerEvents: "auto", backdropFilter: "blur(8px)" }}>
-            <h1 style={{ fontSize: "42px", marginBottom: "14px", color: gameResult === "win" ? "#86efac" : gameResult === "plastic" ? "#fb7185" : "#38bdf8" }}>{getResultTitle()}</h1>
-            <p style={{ fontSize: "18px", marginBottom: "22px", maxWidth: "360px", lineHeight: 1.5 }}>{getResultMessage()}</p>
-            <button onClick={playAgain} style={{ padding: "15px 36px", fontSize: "18px", fontWeight: "bold", borderRadius: "999px", border: "none", background: "linear-gradient(135deg, #2563eb, #38bdf8)", color: "white", cursor: "pointer", boxShadow: "0 8px 24px rgba(0,0,0,0.45)" }}>Restart Game</button>
+            <h1 style={{ fontSize: "42px", marginBottom: "14px", color: gameResult === "win" ? "#86efac" : gameResult === "plastic" ? "#fb7185" : "#38bdf8" }}>
+              {getResultTitle()}
+            </h1>
+            <p style={{ fontSize: "18px", marginBottom: "22px", maxWidth: "360px", lineHeight: 1.5 }}>
+              {getResultMessage()}
+            </p>
+            <button
+              onClick={playAgain}
+              style={{ padding: "15px 36px", fontSize: "18px", fontWeight: "bold", borderRadius: "999px", border: "none", background: "linear-gradient(135deg, #2563eb, #38bdf8)", color: "white", cursor: "pointer", boxShadow: "0 8px 24px rgba(0,0,0,0.45)" }}
+            >
+              Restart Game
+            </button>
           </div>
         )}
       </div>
@@ -627,7 +894,6 @@ export default function App() {
         <ARButton
           sessionInit={{ requiredFeatures: ["hit-test"], optionalFeatures: ["dom-overlay"], domOverlay: { root: overlayElement } }}
           onClick={() => {
-            // Give the hardware layer a split second to prepare
             setTimeout(() => {
               resetGameState();
               setMode("android-webxr");
@@ -638,21 +904,27 @@ export default function App() {
         />
       )}
 
-      <Canvas camera={{ position: [0, 0, 0], fov: 60, near: 0.01, far: 100 }} gl={{ alpha: true, antialias: true, powerPreference: "high-performance" }} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", zIndex: mode === "android-webxr" || mode === "ios-camera" ? 2 : 0, pointerEvents: mode === "ios-camera" ? "auto" : "none", background: "transparent" }}>
+      <Canvas
+        camera={{ position: [0, 0, 0], fov: 60, near: 0.01, far: 100 }}
+        gl={{ alpha: true, antialias: true, powerPreference: "high-performance" }}
+        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", zIndex: mode === "android-webxr" || mode === "ios-camera" ? 2 : 0, pointerEvents: mode === "ios-camera" ? "auto" : "none", background: "transparent" }}
+      >
         {mode === "android-webxr" && (
           <XR>
             <XRTracker onXRStart={setIsXRPresenting} />
+
             {isXRPresenting && (
               <>
                 <ambientLight intensity={2.6} />
                 <directionalLight position={[0, 4, 3]} intensity={2.2} />
+
                 {!androidGamePosition ? (
                   <Reticle onPlace={setAndroidGamePosition} />
                 ) : (
                   <Suspense fallback={null}>
                     <group position={androidGamePosition}>
                       <IceGround mode="android" />
-                      <NormalizedModel url="/models/ice_floe.glb" size={GAME_SIZES.android.iceModelScale} position={[0, 0.01, 0]} />
+                      <NormalizedModel url="/models/ice_floe.glb" size={GAME_SIZES.android.iceModelSize} position={[0, 0.01, 0]} />
                       <Penguin target={target} mode="android" />
                       {!isGameOver && target && (
                         <Collectable key={target.id} target={target} mode="android" onCollect={handleObjectCollected} />

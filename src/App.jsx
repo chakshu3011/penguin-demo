@@ -18,27 +18,27 @@ import {
 } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
- 
+
 // ======================================================
 // GLOBAL SETTINGS
 // ======================================================
- 
+
 const MINDAR_SCRIPT =
   "https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-three.prod.js";
- 
+
 const TARGET_SRC = "/targets/icy-marker.mind";
- 
+
 const GAME_SIZES = {
   android: {
     iceModelScale: 0.09,
     iceGroundRadius: 1.9,
     penguinScale: 0.9,
-    fishScale: 0.0075,
+    fishScale: 0.0075, // Used for Fish, Krill, and Plastic
     fishY: 0.34,
     fishMinRadius: 0.65,
     fishMaxRadius: 1.35,
   },
- 
+
   mindar: {
     iceGroundRadius: 0.82,
     iceModelScale: 0.12,
@@ -49,74 +49,84 @@ const GAME_SIZES = {
     fishZ: 0.18,
   },
 };
- 
+
 // ======================================================
-// DEVICE HELPERS
+// DEVICE HELPERS & SPAWNING LOGIC
 // ======================================================
- 
+
 const isIOSDevice = () => {
   if (typeof window === "undefined") return false;
- 
+
   return (
     /iPad|iPhone|iPod/.test(window.navigator.userAgent) ||
     (window.navigator.platform === "MacIntel" &&
       window.navigator.maxTouchPoints > 1)
   );
 };
- 
+
+// 45% Fish, 37% Krill, 18% Plastic
+function getRandomItemType() {
+  const random = Math.random();
+  if (random < 0.45) return "fish";
+  if (random < 0.82) return "krill";
+  return "plastic";
+}
+
 const getRandomAndroidFishPosition = () => {
   const settings = GAME_SIZES.android;
- 
+
   const angle = Math.random() * Math.PI * 2;
   const radius =
     settings.fishMinRadius +
     Math.random() * (settings.fishMaxRadius - settings.fishMinRadius);
- 
+
   return [
     Math.cos(angle) * radius,
     settings.fishY,
     Math.sin(angle) * radius,
   ];
 };
- 
+
 const getRandomMindARFishPosition = () => {
   const settings = GAME_SIZES.mindar;
- 
+
   const angle = Math.random() * Math.PI * 2;
   const radius =
     settings.fishMinRadius +
     Math.random() * (settings.fishMaxRadius - settings.fishMinRadius);
- 
+
   return new THREE.Vector3(
     Math.cos(angle) * radius,
     Math.sin(angle) * radius,
     settings.fishZ
   );
 };
- 
+
 // ======================================================
 // MODEL PRELOADS FOR ANDROID WEBXR
 // ======================================================
- 
+
 useGLTF.preload("/models/penguin.glb");
 useGLTF.preload("/models/fish.glb");
+useGLTF.preload("/models/krill_antartic.glb");
+useGLTF.preload("/models/plastic_water_bottle.glb");
 useGLTF.preload("/models/ice_floe.glb");
- 
+
 // ======================================================
 // LOAD MINDAR SCRIPT
 // ======================================================
- 
+
 function loadMindARScript() {
   return new Promise((resolve, reject) => {
     if (window.MINDAR && window.MINDAR.IMAGE) {
       resolve(window.MINDAR.IMAGE.MindARThree);
       return;
     }
- 
+
     const existingScript = document.querySelector(
       `script[src="${MINDAR_SCRIPT}"]`
     );
- 
+
     if (existingScript) {
       existingScript.addEventListener("load", () => {
         if (window.MINDAR && window.MINDAR.IMAGE) {
@@ -125,18 +135,18 @@ function loadMindARScript() {
           reject(new Error("MindAR loaded but not available"));
         }
       });
- 
+
       existingScript.addEventListener("error", () => {
         reject(new Error("Failed to load MindAR script"));
       });
- 
+
       return;
     }
- 
+
     const script = document.createElement("script");
     script.src = MINDAR_SCRIPT;
     script.async = true;
- 
+
     script.onload = () => {
       if (window.MINDAR && window.MINDAR.IMAGE) {
         resolve(window.MINDAR.IMAGE.MindARThree);
@@ -144,22 +154,22 @@ function loadMindARScript() {
         reject(new Error("MindAR loaded but not available"));
       }
     };
- 
+
     script.onerror = () => {
       reject(new Error("Failed to load MindAR script"));
     };
- 
+
     document.body.appendChild(script);
   });
 }
- 
+
 // ======================================================
 // ANDROID WEBXR ICE GROUND
 // ======================================================
- 
+
 function BigIceGround({ android = true }) {
   const settings = android ? GAME_SIZES.android : GAME_SIZES.mindar;
- 
+
   return (
     <group position={[0, -0.025, 0]}>
       <mesh rotation={[-Math.PI / 2, 0, 0]}>
@@ -171,7 +181,7 @@ function BigIceGround({ android = true }) {
           side={THREE.DoubleSide}
         />
       </mesh>
- 
+
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.004, 0]}>
         <ringGeometry
           args={[
@@ -187,7 +197,7 @@ function BigIceGround({ android = true }) {
           side={THREE.DoubleSide}
         />
       </mesh>
- 
+
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.008, 0]}>
         <ringGeometry
           args={[
@@ -206,14 +216,14 @@ function BigIceGround({ android = true }) {
     </group>
   );
 }
- 
+
 // ======================================================
 // ANDROID WEBXR MODELS
 // ======================================================
- 
+
 function IceFloe() {
   const ice = useGLTF("/models/ice_floe.glb");
- 
+
   return (
     <primitive
       object={ice.scene}
@@ -222,12 +232,12 @@ function IceFloe() {
     />
   );
 }
- 
+
 function Penguin() {
   const group = useRef();
   const penguin = useGLTF("/models/penguin.glb");
   const { actions, names } = useAnimations(penguin.animations, group);
- 
+
   useEffect(() => {
     if (names && names.length > 0) {
       const activeAction = actions[names[0]];
@@ -236,13 +246,13 @@ function Penguin() {
       }
     }
   }, [actions, names]);
- 
+
   useFrame(() => {
     if (group.current) {
       group.current.rotation.y += 0.003;
     }
   });
- 
+
   return (
     <primitive
       ref={group}
@@ -252,29 +262,74 @@ function Penguin() {
     />
   );
 }
- 
+
 // ======================================================
-// ANDROID WEBXR TRACKER
+// ANDROID WEBXR DYNAMIC ITEMS
 // ======================================================
- 
+
+function AndroidItem({ item, onCollect }) {
+  const ref = useRef();
+  const fish = useGLTF("/models/fish.glb");
+  const krill = useGLTF("/models/krill_antartic.glb");
+  const plastic = useGLTF("/models/plastic_water_bottle.glb");
+
+  const { actions, names } = useAnimations(
+    item.type === "krill" ? krill.animations : [],
+    ref
+  );
+
+  useEffect(() => {
+    if (item.type === "krill" && names && names.length > 0) {
+      const activeAction = actions[names[0]];
+      if (activeAction) {
+        activeAction.reset().play();
+      }
+    }
+  }, [item.type, actions, names]);
+
+  useFrame(() => {
+    if (ref.current) {
+      ref.current.rotation.y += 0.035;
+      ref.current.position.y =
+        item.position[1] + Math.sin(Date.now() * 0.004) * 0.06;
+    }
+  });
+
+  let sceneToRender = fish.scene;
+  if (item.type === "krill") sceneToRender = krill.scene;
+  if (item.type === "plastic") sceneToRender = plastic.scene;
+
+  return (
+    <Interactive onSelect={() => onCollect(item.type)}>
+      <group ref={ref} position={item.position}>
+        <primitive
+          object={sceneToRender}
+          scale={GAME_SIZES.android.fishScale} // Uses the stable scale for all items
+          position={[0, 0, 0]}
+        />
+      </group>
+    </Interactive>
+  );
+}
+
+// ======================================================
+// ANDROID WEBXR TRACKER & RETICLE
+// ======================================================
+
 function XRTracker({ onXRStart }) {
   const { isPresenting } = useXR();
- 
+
   useEffect(() => {
     onXRStart(isPresenting);
   }, [isPresenting, onXRStart]);
- 
+
   return null;
 }
- 
-// ======================================================
-// ANDROID WEBXR RETICLE
-// ======================================================
- 
+
 function Reticle({ onPlace }) {
   const reticleRef = useRef();
   const { camera } = useThree();
- 
+
   useHitTest((hitMatrix, hit) => {
     if (hit && reticleRef.current) {
       hitMatrix.decompose(
@@ -284,24 +339,24 @@ function Reticle({ onPlace }) {
       );
     }
   });
- 
+
   return (
     <Interactive
       onSelect={() => {
         if (!reticleRef.current) return;
- 
+
         const spawnPos = reticleRef.current.position.clone();
- 
+
         const dirX = spawnPos.x - camera.position.x;
         const dirZ = spawnPos.z - camera.position.z;
         const distance = Math.sqrt(dirX * dirX + dirZ * dirZ);
- 
+
         if (distance > 0 && distance < 1.7) {
           const push = 1.7 - distance;
           spawnPos.x += (dirX / distance) * push;
           spawnPos.z += (dirZ / distance) * push;
         }
- 
+
         onPlace(spawnPos);
       }}
     >
@@ -312,44 +367,15 @@ function Reticle({ onPlace }) {
     </Interactive>
   );
 }
- 
+
 // ======================================================
-// ANDROID WEBXR FISH
+// CREATE MINDAR ICE GROUND (iOS Unchanged)
 // ======================================================
- 
-function AndroidFish({ position, onCollect }) {
-  const ref = useRef();
-  const fish = useGLTF("/models/fish.glb");
- 
-  useFrame(() => {
-    if (ref.current) {
-      ref.current.rotation.y += 0.035;
-      ref.current.position.y =
-        position[1] + Math.sin(Date.now() * 0.004) * 0.06;
-    }
-  });
- 
-  return (
-    <Interactive onSelect={onCollect}>
-      <group ref={ref} position={position}>
-        <primitive
-          object={fish.scene}
-          scale={GAME_SIZES.android.fishScale}
-          position={[0, 0, 0]}
-        />
-      </group>
-    </Interactive>
-  );
-}
- 
-// ======================================================
-// CREATE MINDAR ICE GROUND
-// ======================================================
- 
+
 function createMindARIceGround() {
   const group = new THREE.Group();
   const settings = GAME_SIZES.mindar;
- 
+
   const circleGeometry = new THREE.CircleGeometry(settings.iceGroundRadius, 96);
   const circleMaterial = new THREE.MeshBasicMaterial({
     color: 0xdff8ff,
@@ -357,52 +383,52 @@ function createMindARIceGround() {
     opacity: 0.88,
     side: THREE.DoubleSide,
   });
- 
+
   const circle = new THREE.Mesh(circleGeometry, circleMaterial);
   circle.position.set(0, 0, 0);
   group.add(circle);
- 
+
   const ringGeometry = new THREE.RingGeometry(
     settings.iceGroundRadius * 0.88,
     settings.iceGroundRadius,
     96
   );
- 
+
   const ringMaterial = new THREE.MeshBasicMaterial({
     color: 0x76d7ff,
     transparent: true,
     opacity: 0.9,
     side: THREE.DoubleSide,
   });
- 
+
   const ring = new THREE.Mesh(ringGeometry, ringMaterial);
   ring.position.set(0, 0, 0.004);
   group.add(ring);
- 
+
   const innerRingGeometry = new THREE.RingGeometry(
     settings.iceGroundRadius * 0.32,
     settings.iceGroundRadius * 0.35,
     96
   );
- 
+
   const innerRingMaterial = new THREE.MeshBasicMaterial({
     color: 0xffffff,
     transparent: true,
     opacity: 0.55,
     side: THREE.DoubleSide,
   });
- 
+
   const innerRing = new THREE.Mesh(innerRingGeometry, innerRingMaterial);
   innerRing.position.set(0, 0, 0.008);
   group.add(innerRing);
- 
+
   return group;
 }
- 
+
 // ======================================================
-// MINDAR MARKER-BASED GAME
+// MINDAR MARKER-BASED GAME (iOS Unchanged)
 // ======================================================
- 
+
 function MindARMarkerGame({
   isActive,
   targetSrc,
@@ -413,73 +439,73 @@ function MindARMarkerGame({
   onFishCollected,
 }) {
   const containerRef = useRef(null);
- 
+
   const mindarRef = useRef(null);
   const rendererRef = useRef(null);
   const sceneRef = useRef(null);
   const cameraRef = useRef(null);
- 
+
   const fishGroupRef = useRef(null);
   const fishHitRef = useRef(null);
   const fishBasePosRef = useRef(new THREE.Vector3());
   const markerFoundRef = useRef(false);
- 
+
   const mixerRef = useRef(null);
   const clockRef = useRef(new THREE.Clock());
- 
+
   const isGameOverRef = useRef(isGameOver);
   const onFishCollectedRef = useRef(onFishCollected);
   const onTrackingChangeRef = useRef(onTrackingChange);
   const onReadyRef = useRef(onReady);
   const onErrorRef = useRef(onError);
- 
+
   const lastCollectTimeRef = useRef(0);
- 
+
   useEffect(() => {
     isGameOverRef.current = isGameOver;
   }, [isGameOver]);
- 
+
   useEffect(() => {
     onFishCollectedRef.current = onFishCollected;
   }, [onFishCollected]);
- 
+
   useEffect(() => {
     onTrackingChangeRef.current = onTrackingChange;
   }, [onTrackingChange]);
- 
+
   useEffect(() => {
     onReadyRef.current = onReady;
   }, [onReady]);
- 
+
   useEffect(() => {
     onErrorRef.current = onError;
   }, [onError]);
- 
+
   const repositionFish = useCallback(() => {
     const pos = getRandomMindARFishPosition();
     fishBasePosRef.current.copy(pos);
- 
+
     if (fishGroupRef.current) {
       fishGroupRef.current.position.copy(pos);
     }
- 
+
     if (fishHitRef.current) {
       fishHitRef.current.position.copy(pos);
     }
   }, []);
- 
+
   useEffect(() => {
     if (!isActive) return;
- 
+
     let disposed = false;
     let pointerHandler = null;
- 
+
     const setupMindAR = async () => {
       try {
         const MindARThree = await loadMindARScript();
- 
+
         if (disposed || !containerRef.current) return;
- 
+
         const mindarThree = new MindARThree({
           container: containerRef.current,
           imageTargetSrc: targetSrc,
@@ -488,99 +514,94 @@ function MindARMarkerGame({
           filterMinCF: 0.0001,
           filterBeta: 0.001,
         });
- 
+
         mindarRef.current = mindarThree;
- 
+
         const { renderer, scene, camera } = mindarThree;
         rendererRef.current = renderer;
         sceneRef.current = scene;
         cameraRef.current = camera;
- 
+
         renderer.setClearColor(0x000000, 0);
         renderer.outputColorSpace = THREE.SRGBColorSpace;
- 
+
         renderer.domElement.style.position = "absolute";
         renderer.domElement.style.inset = "0";
         renderer.domElement.style.width = "100%";
         renderer.domElement.style.height = "100%";
         renderer.domElement.style.touchAction = "none";
- 
+
         const ambientLight = new THREE.HemisphereLight(0xffffff, 0x444444, 2.4);
         scene.add(ambientLight);
- 
+
         const directionalLight = new THREE.DirectionalLight(0xffffff, 2.2);
         directionalLight.position.set(0, 2, 3);
         scene.add(directionalLight);
- 
+
         const anchor = mindarThree.addAnchor(0);
- 
+
         anchor.onTargetFound = () => {
           markerFoundRef.current = true;
- 
+
           if (onTrackingChangeRef.current) {
             onTrackingChangeRef.current(true);
           }
         };
- 
+
         anchor.onTargetLost = () => {
           markerFoundRef.current = false;
- 
+
           if (onTrackingChangeRef.current) {
             onTrackingChangeRef.current(false);
           }
         };
- 
-        // Ice ground on marker plane
+
         const iceGround = createMindARIceGround();
         anchor.group.add(iceGround);
- 
+
         const loader = new GLTFLoader();
- 
+
         const [iceGltf, penguinGltf, fishGltf] = await Promise.all([
           loader.loadAsync("/models/ice_floe.glb"),
           loader.loadAsync("/models/penguin.glb"),
           loader.loadAsync("/models/fish.glb"),
         ]);
- 
+
         if (disposed) return;
- 
-        // Ice floe model
+
         const iceModel = iceGltf.scene;
         iceModel.scale.setScalar(GAME_SIZES.mindar.iceModelScale);
         iceModel.position.set(0, 0, 0.025);
         iceModel.rotation.x = Math.PI / 2;
         anchor.group.add(iceModel);
- 
-        // Penguin model
+
         const penguinRoot = new THREE.Group();
         penguinRoot.position.set(0, -0.03, 0.08);
         penguinRoot.rotation.x = Math.PI / 2;
- 
+
         const penguinModel = penguinGltf.scene;
         penguinModel.scale.setScalar(GAME_SIZES.mindar.penguinScale);
         penguinRoot.add(penguinModel);
         anchor.group.add(penguinRoot);
- 
+
         if (penguinGltf.animations && penguinGltf.animations.length > 0) {
           const mixer = new THREE.AnimationMixer(penguinModel);
           mixerRef.current = mixer;
- 
+
           const action = mixer.clipAction(penguinGltf.animations[0]);
           action.reset().play();
         }
- 
-        // Fish model
+
         const fishGroup = new THREE.Group();
         fishGroup.rotation.x = Math.PI / 2;
- 
+
         const fishModel = fishGltf.scene;
         fishModel.scale.setScalar(GAME_SIZES.mindar.fishScale);
         fishGroup.add(fishModel);
- 
+
         anchor.group.add(fishGroup);
         fishGroupRef.current = fishGroup;
- 
-        // Invisible hit target for easy tapping
+
         const fishHitGeometry = new THREE.SphereGeometry(0.18, 24, 24);
         const fishHitMaterial = new THREE.MeshBasicMaterial({
           color: 0xff0000,
@@ -588,100 +609,99 @@ function MindARMarkerGame({
           opacity: 0,
           depthWrite: false,
         });
- 
+
         const fishHit = new THREE.Mesh(fishHitGeometry, fishHitMaterial);
         fishHit.name = "fish-hit-target";
         anchor.group.add(fishHit);
         fishHitRef.current = fishHit;
- 
+
         repositionFish();
- 
+
         const raycaster = new THREE.Raycaster();
         const pointer = new THREE.Vector2();
- 
+
         pointerHandler = (event) => {
           if (!rendererRef.current || !cameraRef.current) return;
           if (!fishHitRef.current) return;
           if (isGameOverRef.current) return;
           if (!markerFoundRef.current) return;
- 
+
           event.preventDefault();
- 
+
           const now = Date.now();
- 
-          // avoid double tap / double event collection
+
           if (now - lastCollectTimeRef.current < 250) {
             return;
           }
- 
+
           const rect = rendererRef.current.domElement.getBoundingClientRect();
- 
+
           pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
           pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
- 
+
           raycaster.setFromCamera(pointer, cameraRef.current);
- 
+
           const hits = raycaster.intersectObject(fishHitRef.current, true);
- 
+
           if (hits.length > 0) {
             lastCollectTimeRef.current = now;
- 
+
             if (onFishCollectedRef.current) {
               onFishCollectedRef.current();
             }
- 
+
             repositionFish();
           }
         };
- 
+
         renderer.domElement.addEventListener("pointerdown", pointerHandler, {
           passive: false,
         });
- 
+
         await mindarThree.start();
- 
+
         if (onReadyRef.current) {
           onReadyRef.current();
         }
- 
+
         renderer.setAnimationLoop(() => {
           const delta = clockRef.current.getDelta();
- 
+
           if (mixerRef.current) {
             mixerRef.current.update(delta);
           }
- 
+
           if (penguinRoot) {
             penguinRoot.rotation.z += 0.004;
           }
- 
+
           if (fishGroupRef.current && fishHitRef.current) {
             const base = fishBasePosRef.current;
             const floatingZ =
               base.z + Math.sin(Date.now() * 0.004) * 0.035;
- 
+
             fishGroupRef.current.position.set(base.x, base.y, floatingZ);
             fishHitRef.current.position.set(base.x, base.y, floatingZ);
- 
+
             fishGroupRef.current.rotation.z += 0.045;
           }
- 
+
           renderer.render(scene, camera);
         });
       } catch (error) {
         console.error("MindAR setup error:", error);
- 
+
         if (onErrorRef.current) {
           onErrorRef.current(error);
         }
       }
     };
- 
+
     setupMindAR();
- 
+
     return () => {
       disposed = true;
- 
+
       try {
         if (rendererRef.current && pointerHandler) {
           rendererRef.current.domElement.removeEventListener(
@@ -689,24 +709,24 @@ function MindARMarkerGame({
             pointerHandler
           );
         }
- 
+
         if (rendererRef.current) {
           rendererRef.current.setAnimationLoop(null);
         }
- 
+
         if (mindarRef.current) {
           mindarRef.current.stop();
         }
- 
+
         markerFoundRef.current = false;
- 
+
         if (onTrackingChangeRef.current) {
           onTrackingChangeRef.current(false);
         }
       } catch (error) {
         console.log("MindAR cleanup error:", error);
       }
- 
+
       mindarRef.current = null;
       rendererRef.current = null;
       sceneRef.current = null;
@@ -716,9 +736,9 @@ function MindARMarkerGame({
       mixerRef.current = null;
     };
   }, [isActive, targetSrc, repositionFish]);
- 
+
   if (!isActive) return null;
- 
+
   return (
     <div
       ref={containerRef}
@@ -734,59 +754,59 @@ function MindARMarkerGame({
     />
   );
 }
- 
+
 // ======================================================
 // MAIN APP
 // ======================================================
- 
+
 export default function App() {
   const [overlayElement, setOverlayElement] = useState(null);
- 
+
   const [isIOS, setIsIOS] = useState(false);
   const [webXRSupported, setWebXRSupported] = useState(false);
   const [supportChecked, setSupportChecked] = useState(false);
- 
+
   const [mode, setMode] = useState("intro");
- 
-  // modes:
-  // intro
-  // android-webxr
-  // mindar-marker
- 
+
   const [isXRPresenting, setIsXRPresenting] = useState(false);
   const [androidGamePosition, setAndroidGamePosition] = useState(null);
-  const [androidFishPosition, setAndroidFishPosition] = useState(
-    getRandomAndroidFishPosition()
-  );
- 
+  const [androidItem, setAndroidItem] = useState({
+    type: "fish",
+    position: getRandomAndroidFishPosition(),
+  });
+
   const [mindARReady, setMindARReady] = useState(false);
   const [mindARError, setMindARError] = useState(null);
   const [markerFound, setMarkerFound] = useState(false);
- 
-  const [score, setScore] = useState(0);
-  const [timeLeft, setTimeLeft] = useState(30);
+
+  // Unified Game States
+  const [score, setScore] = useState(0); // For iOS
+  const [fishCount, setFishCount] = useState(0); // For Android
+  const [krillCount, setKrillCount] = useState(0); // For Android
+  const [timeLeft, setTimeLeft] = useState(60); 
   const [isGameOver, setIsGameOver] = useState(false);
- 
+  const [gameResult, setGameResult] = useState(null); // 'win', 'plastic', or 'timeup'
+
   const ambience = useRef(null);
   const collect = useRef(null);
   const footsteps = useRef(null);
   const penguinChirp = useRef(null);
- 
+
   // ======================================================
   // PLATFORM CHECK
   // ======================================================
- 
+
   useEffect(() => {
     const checkSupport = async () => {
       const ios = isIOSDevice();
       setIsIOS(ios);
- 
+
       if (typeof navigator !== "undefined" && navigator.xr && !ios) {
         try {
           const supported = await navigator.xr.isSessionSupported(
             "immersive-ar"
           );
- 
+
           setWebXRSupported(supported);
         } catch (error) {
           console.error("WebXR check failed:", error);
@@ -795,30 +815,30 @@ export default function App() {
       } else {
         setWebXRSupported(false);
       }
- 
+
       setSupportChecked(true);
     };
- 
+
     checkSupport();
   }, []);
- 
+
   // ======================================================
   // AUDIO SETUP
   // ======================================================
- 
+
   useEffect(() => {
     ambience.current = new Audio("/audios/antarctic_ambience.mp3");
     ambience.current.loop = true;
     ambience.current.volume = 0.3;
- 
+
     collect.current = new Audio("/audios/fish_collect.mp3");
- 
+
     footsteps.current = new Audio("/audios/snow_footsteps.mp3");
     footsteps.current.volume = 0.5;
- 
+
     penguinChirp.current = new Audio("/audios/baby_penguin.mp3");
     penguinChirp.current.volume = 1.0;
- 
+
     return () => {
       if (ambience.current) ambience.current.pause();
       if (collect.current) collect.current.pause();
@@ -826,91 +846,99 @@ export default function App() {
       if (penguinChirp.current) penguinChirp.current.pause();
     };
   }, []);
- 
+
   // ======================================================
   // GAME ACTIVE CHECK
   // ======================================================
- 
+
   const gameIsActive = useMemo(() => {
     if (mode === "android-webxr") {
       return isXRPresenting;
     }
- 
+
     if (mode === "mindar-marker") {
       return mindARReady;
     }
- 
+
     return false;
   }, [mode, isXRPresenting, mindARReady]);
- 
+
   const gameHasStartedForTimer = useMemo(() => {
     if (mode === "android-webxr") {
       return Boolean(androidGamePosition);
     }
- 
+
     if (mode === "mindar-marker") {
       return markerFound;
     }
- 
+
     return false;
   }, [mode, androidGamePosition, markerFound]);
- 
+
   // ======================================================
   // TIMER
   // ======================================================
- 
+
   useEffect(() => {
     let timer;
- 
+
     if (gameHasStartedForTimer && timeLeft > 0 && !isGameOver) {
       timer = setInterval(() => {
         setTimeLeft((prev) => prev - 1);
       }, 1000);
     } else if (timeLeft === 0 && !isGameOver) {
       setIsGameOver(true);
- 
+      
+      if (mode === "android-webxr") {
+        setGameResult("timeup");
+      }
+
       if (penguinChirp.current) {
         penguinChirp.current.currentTime = 0;
         penguinChirp.current.play().catch((e) => console.log(e));
       }
     }
- 
+
     return () => clearInterval(timer);
-  }, [gameHasStartedForTimer, timeLeft, isGameOver]);
- 
+  }, [gameHasStartedForTimer, timeLeft, isGameOver, mode]);
+
   // ======================================================
   // GAME ACTIONS
   // ======================================================
- 
+
   const playAmbience = () => {
     if (ambience.current) {
       ambience.current.play().catch((e) => console.log(e));
     }
   };
- 
+
   const stopAmbience = () => {
     if (ambience.current) {
       ambience.current.pause();
       ambience.current.currentTime = 0;
     }
   };
- 
+
   const resetGameState = () => {
     setScore(0);
-    setTimeLeft(30);
+    setFishCount(0);
+    setKrillCount(0);
+    setGameResult(null);
+    setTimeLeft(60);
     setIsGameOver(false);
- 
+
     setAndroidGamePosition(null);
-    setAndroidFishPosition(getRandomAndroidFishPosition());
- 
+    setAndroidItem({ type: getRandomItemType(), position: getRandomAndroidFishPosition() });
+
     setMindARReady(false);
     setMindARError(null);
     setMarkerFound(false);
   };
- 
+
+  // iOS ONLY: Handles classic single fish collection
   const handleFishCollected = useCallback(() => {
     if (isGameOver) return;
- 
+
     if (
       typeof window !== "undefined" &&
       window.navigator &&
@@ -918,90 +946,146 @@ export default function App() {
     ) {
       window.navigator.vibrate(50);
     }
- 
+
     setScore((s) => s + 1);
- 
+
     if (collect.current) {
       collect.current.currentTime = 0;
       collect.current.play().catch((e) => console.log(e));
     }
- 
+
     if (footsteps.current) {
       footsteps.current.currentTime = 0;
       footsteps.current.play().catch((e) => console.log(e));
     }
   }, [isGameOver]);
- 
-  const handleAndroidFishCollected = () => {
-    handleFishCollected();
-    setAndroidFishPosition(getRandomAndroidFishPosition());
+
+  // ANDROID ONLY: Handles Fish, Krill, and Plastic
+  const handleAndroidItemCollected = (type) => {
+    if (isGameOver) return;
+
+    if (
+      typeof window !== "undefined" &&
+      window.navigator &&
+      window.navigator.vibrate
+    ) {
+      window.navigator.vibrate(50);
+    }
+
+    // Plastic = Instant Game Over
+    if (type === "plastic") {
+      setIsGameOver(true);
+      setGameResult("plastic");
+      stopAmbience();
+      return;
+    }
+
+    if (collect.current) {
+      collect.current.currentTime = 0;
+      collect.current.play().catch((e) => console.log(e));
+    }
+
+    if (footsteps.current) {
+      footsteps.current.currentTime = 0;
+      footsteps.current.play().catch((e) => console.log(e));
+    }
+
+    let newFish = fishCount;
+    let newKrill = krillCount;
+
+    if (type === "fish") {
+      newFish += 1;
+      setFishCount(newFish);
+    } else if (type === "krill") {
+      newKrill += 1;
+      setKrillCount(newKrill);
+    }
+
+    // Win Condition Checks
+    if (newFish >= 10 || newKrill >= 5) {
+      setIsGameOver(true);
+      setGameResult("win");
+      stopAmbience();
+      return;
+    }
+
+    // Spawn next random item
+    setAndroidItem({
+      type: getRandomItemType(),
+      position: getRandomAndroidFishPosition(),
+    });
   };
- 
+
   const startMindAR = () => {
     resetGameState();
     setMode("mindar-marker");
     playAmbience();
   };
- 
+
   const stopGame = () => {
     stopAmbience();
     resetGameState();
     setIsXRPresenting(false);
     setMode("intro");
   };
- 
+
   const playAgain = () => {
     setScore(0);
-    setTimeLeft(30);
+    setFishCount(0);
+    setKrillCount(0);
+    setTimeLeft(60);
     setIsGameOver(false);
+    setGameResult(null);
+
     setAndroidGamePosition(null);
-    setAndroidFishPosition(getRandomAndroidFishPosition());
- 
+    setAndroidItem({ type: getRandomItemType(), position: getRandomAndroidFishPosition() });
+
     if (mode === "mindar-marker") {
       setMarkerFound(false);
     }
- 
+
     playAmbience();
   };
- 
-  const getEndMessage = () => {
+
+  // iOS Legacy End Message
+  const getEndMessageIOS = () => {
     if (score === 0) return "ICY is sad and starving! 😭";
     if (score <= 3) return "ICY survived, but is still hungry! 🐟";
     if (score <= 7) return "ICY is well-fed and happy! 🐧";
     return "ICY is stuffed and ready to dance! 🎉";
   };
- 
+
   const handleMindARReady = useCallback(() => {
     setMindARReady(true);
     setMindARError(null);
   }, []);
- 
+
   const handleMindARError = useCallback((error) => {
     console.error(error);
     setMindARError(error);
   }, []);
- 
+
   const handleMarkerTrackingChange = useCallback((found) => {
     setMarkerFound(found);
   }, []);
- 
+
   // ======================================================
   // UI FLAGS
   // ======================================================
- 
+
   const androidCanUseWebXR = supportChecked && webXRSupported && !isIOS;
- 
+
   const shouldUseMindAR =
     supportChecked && (isIOS || !webXRSupported || !androidCanUseWebXR);
- 
+
   const showIntro = mode === "intro" && !isXRPresenting;
- 
+
   const showHUD = gameIsActive || mode === "mindar-marker";
- 
+
   // ======================================================
   // RENDER
   // ======================================================
- 
+
   return (
     <div
       style={{
@@ -1024,7 +1108,7 @@ export default function App() {
         onTrackingChange={handleMarkerTrackingChange}
         onFishCollected={handleFishCollected}
       />
- 
+
       {/* INTRO PAGE */}
       {showIntro && (
         <div
@@ -1058,7 +1142,7 @@ export default function App() {
           >
             ANTARCTICA AR EXPERIENCE
           </div>
- 
+
           <h1
             style={{
               fontSize: "52px",
@@ -1069,7 +1153,7 @@ export default function App() {
           >
             ICY AR
           </h1>
- 
+
           <p
             style={{
               fontSize: "18px",
@@ -1079,13 +1163,15 @@ export default function App() {
               lineHeight: 1.5,
             }}
           >
-            Feed the baby penguin by catching fish in augmented reality.
+            {androidCanUseWebXR
+              ? "Android Goal: Collect 10 Fish or 5 Krill to win! Avoid Plastic bottles, they will end the game!"
+              : "Feed the baby penguin by catching fish in augmented reality."}
           </p>
- 
+
           {!supportChecked && (
             <p style={{ opacity: 0.8 }}>Checking AR support...</p>
           )}
- 
+
           {shouldUseMindAR && (
             <>
               <p
@@ -1101,7 +1187,7 @@ export default function App() {
                 your camera at the Antarctica marker to place ICY in the real
                 world.
               </p>
- 
+
               <button
                 onClick={startMindAR}
                 style={{
@@ -1120,7 +1206,7 @@ export default function App() {
               </button>
             </>
           )}
- 
+
           {androidCanUseWebXR && (
             <p
               style={{
@@ -1135,7 +1221,7 @@ export default function App() {
               ICY.
             </p>
           )}
- 
+
           {mindARError && (
             <p
               style={{
@@ -1151,7 +1237,7 @@ export default function App() {
           )}
         </div>
       )}
- 
+
       {/* HUD */}
       <div
         ref={setOverlayElement}
@@ -1181,7 +1267,7 @@ export default function App() {
           <div
             style={{
               color: "white",
-              fontSize: "22px",
+              fontSize: "18px",
               fontWeight: "900",
               padding: "10px 16px",
               borderRadius: "999px",
@@ -1191,13 +1277,17 @@ export default function App() {
               textShadow: "2px 2px 4px rgba(0,0,0,0.8)",
             }}
           >
-            🐟 {score}
+            {mode === "android-webxr" ? (
+              <>🐟 {fishCount}/10 &nbsp; 🦐 {krillCount}/5</>
+            ) : (
+              <>🐟 {score}</>
+            )}
           </div>
- 
+
           {!isGameOver && (
             <div
               style={{
-                color: timeLeft <= 5 ? "#fb7185" : "white",
+                color: timeLeft <= 10 ? "#fb7185" : "white",
                 fontSize: "24px",
                 fontWeight: "900",
                 padding: "10px 16px",
@@ -1211,7 +1301,7 @@ export default function App() {
               ⏱ 00:{timeLeft.toString().padStart(2, "0")}
             </div>
           )}
- 
+
           <button
             onClick={stopGame}
             style={{
@@ -1231,7 +1321,7 @@ export default function App() {
             Exit
           </button>
         </div>
- 
+
         {/* ANDROID INSTRUCTION */}
         {mode === "android-webxr" &&
           isXRPresenting &&
@@ -1257,7 +1347,7 @@ export default function App() {
               Scan the floor and tap the ring to place ICY.
             </div>
           )}
- 
+
         {/* MINDAR INSTRUCTIONS */}
         {mode === "mindar-marker" && !mindARReady && !mindARError && (
           <div
@@ -1280,7 +1370,7 @@ export default function App() {
             Loading MindAR camera...
           </div>
         )}
- 
+
         {mode === "mindar-marker" &&
           mindARReady &&
           !markerFound &&
@@ -1306,7 +1396,7 @@ export default function App() {
               Point your camera at the printed Antarctica marker.
             </div>
           )}
- 
+
         {mode === "mindar-marker" &&
           mindARReady &&
           markerFound &&
@@ -1332,7 +1422,7 @@ export default function App() {
               Tap the fish to feed ICY!
             </div>
           )}
- 
+
         {/* GAME OVER */}
         {isGameOver && (
           <div
@@ -1352,34 +1442,66 @@ export default function App() {
               backdropFilter: "blur(8px)",
             }}
           >
-            <h1
-              style={{
-                fontSize: "46px",
-                marginBottom: "10px",
-                textShadow: "2px 2px 10px rgba(0,0,0,1)",
-                color: "#38bdf8",
-              }}
-            >
-              TIME&apos;S UP!
-            </h1>
- 
-            <p style={{ fontSize: "22px", marginBottom: "10px" }}>
-              You fed ICY <b>{score}</b> fish!
-            </p>
- 
-            <p
-              style={{
-                fontSize: "20px",
-                fontWeight: "bold",
-                marginBottom: "35px",
-                color: "#a7f3d0",
-                maxWidth: "330px",
-                lineHeight: 1.4,
-              }}
-            >
-              {getEndMessage()}
-            </p>
- 
+            {mode === "android-webxr" ? (
+              <>
+                <h1
+                  style={{
+                    fontSize: "46px",
+                    marginBottom: "10px",
+                    textShadow: "2px 2px 10px rgba(0,0,0,1)",
+                    color: gameResult === "win" ? "#86efac" : gameResult === "plastic" ? "#fb7185" : "#38bdf8",
+                  }}
+                >
+                  {gameResult === "win" ? "ICY IS SAFE!" : gameResult === "plastic" ? "OH NO!" : "TIME'S UP!"}
+                </h1>
+                
+                <p
+                  style={{
+                    fontSize: "20px",
+                    fontWeight: "bold",
+                    marginBottom: "35px",
+                    color: "#a7f3d0",
+                    maxWidth: "330px",
+                    lineHeight: 1.4,
+                  }}
+                >
+                  {gameResult === "win" 
+                    ? `You won! You collected ${fishCount} Fish and ${krillCount} Krill!` 
+                    : gameResult === "plastic" 
+                    ? "You fed ICY plastic! It's extremely dangerous for marine life." 
+                    : `You only got ${fishCount} Fish and ${krillCount} Krill. ICY is still hungry!`}
+                </p>
+              </>
+            ) : (
+              <>
+                <h1
+                  style={{
+                    fontSize: "46px",
+                    marginBottom: "10px",
+                    textShadow: "2px 2px 10px rgba(0,0,0,1)",
+                    color: "#38bdf8",
+                  }}
+                >
+                  TIME&apos;S UP!
+                </h1>
+                <p style={{ fontSize: "22px", marginBottom: "10px" }}>
+                  You fed ICY <b>{score}</b> fish!
+                </p>
+                <p
+                  style={{
+                    fontSize: "20px",
+                    fontWeight: "bold",
+                    marginBottom: "35px",
+                    color: "#a7f3d0",
+                    maxWidth: "330px",
+                    lineHeight: 1.4,
+                  }}
+                >
+                  {getEndMessageIOS()}
+                </p>
+              </>
+            )}
+
             <button
               onClick={playAgain}
               style={{
@@ -1399,7 +1521,7 @@ export default function App() {
           </div>
         )}
       </div>
- 
+
       {/* ANDROID WEBXR START BUTTON */}
       {androidCanUseWebXR && overlayElement && (
         <ARButton
@@ -1409,9 +1531,12 @@ export default function App() {
             domOverlay: { root: overlayElement },
           }}
           onClick={() => {
-            resetGameState();
-            setMode("android-webxr");
-            playAmbience();
+            // FIX: Added timeout to prevent the blank screen AR bug
+            setTimeout(() => {
+              resetGameState();
+              setMode("android-webxr");
+              playAmbience();
+            }, 150);
           }}
           style={{
             position: "absolute",
@@ -1431,7 +1556,7 @@ export default function App() {
           }}
         />
       )}
- 
+
       {/* ANDROID WEBXR CANVAS */}
       <Canvas
         camera={{
@@ -1458,12 +1583,12 @@ export default function App() {
         {mode === "android-webxr" && (
           <XR>
             <XRTracker onXRStart={setIsXRPresenting} />
- 
+
             {isXRPresenting && (
               <>
                 <ambientLight intensity={2.5} />
                 <directionalLight position={[0, 4, 3]} intensity={2.2} />
- 
+
                 {!androidGamePosition ? (
                   <Reticle onPlace={setAndroidGamePosition} />
                 ) : (
@@ -1472,11 +1597,11 @@ export default function App() {
                       <BigIceGround android />
                       <IceFloe />
                       <Penguin />
- 
+
                       {!isGameOver && (
-                        <AndroidFish
-                          position={androidFishPosition}
-                          onCollect={handleAndroidFishCollected}
+                        <AndroidItem
+                          item={androidItem}
+                          onCollect={handleAndroidItemCollected}
                         />
                       )}
                     </group>

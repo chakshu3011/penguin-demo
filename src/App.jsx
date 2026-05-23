@@ -9,19 +9,19 @@ import {
 } from "@react-three/xr";
 import { useGLTF, useAnimations } from "@react-three/drei";
 import {
-  useRef,
   useEffect,
+  useMemo,
+  useRef,
   useState,
   Suspense,
-  useMemo,
   useCallback,
 } from "react";
 import * as THREE from "three";
 
 // ======================================================
-// STABLE VERSION
+// FINAL STABLE VERSION
 // Android = WebXR floor AR
-// iOS / unsupported Android = camera AR style game
+// iOS = Camera AR game mode
 // ======================================================
 
 const GAME_TIME = 60;
@@ -72,11 +72,17 @@ const ITEM_CONFIG = {
   },
 };
 
+useGLTF.preload("/models/penguin.glb");
+useGLTF.preload("/models/fish.glb");
+useGLTF.preload("/models/krill_antartic.glb");
+useGLTF.preload("/models/plastic_water_bottle.glb");
+useGLTF.preload("/models/ice_floe.glb");
+
 // ======================================================
 // HELPERS
 // ======================================================
 
-const isIOSDevice = () => {
+function isIOSDevice() {
   if (typeof window === "undefined") return false;
 
   return (
@@ -84,7 +90,7 @@ const isIOSDevice = () => {
     (window.navigator.platform === "MacIntel" &&
       window.navigator.maxTouchPoints > 1)
   );
-};
+}
 
 function getRandomItemType() {
   const random = Math.random();
@@ -103,7 +109,7 @@ function getRandomPosition(mode) {
   return [Math.cos(angle) * radius, s.itemY, Math.sin(angle) * radius];
 }
 
-function createTarget(mode = "android") {
+function createTarget() {
   const type = getRandomItemType();
 
   return {
@@ -183,11 +189,10 @@ function IOSCameraBackground({ active, onReady, onError }) {
           videoRef.current.muted = true;
 
           await videoRef.current.play();
-
           onReady();
         }
       } catch (error) {
-        console.error("Camera error:", error);
+        console.error("iOS camera error:", error);
         onError(error);
       }
     }
@@ -226,14 +231,14 @@ function IOSCameraBackground({ active, onReady, onError }) {
 }
 
 // ======================================================
-// 3D PARTS
+// ICE GROUND
 // ======================================================
 
 function IceGround({ mode }) {
   const s = mode === "android" ? GAME_SIZES.android : GAME_SIZES.ios;
 
   return (
-    <group position={[0, -0.05, 0]}>
+    <group position={[0, -0.025, 0]}>
       <mesh rotation={[-Math.PI / 2, 0, 0]}>
         <circleGeometry args={[s.iceRadius, 96]} />
         <meshBasicMaterial
@@ -247,21 +252,9 @@ function IceGround({ mode }) {
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.006, 0]}>
         <ringGeometry args={[s.iceRadius * 0.88, s.iceRadius, 96]} />
         <meshBasicMaterial
-          color="#76d7ff"
+          color="#67d9ff"
           transparent
           opacity={0.9}
-          depthWrite={false}
-          side={THREE.DoubleSide}
-        />
-      </mesh>
-
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.008, 0]}>
-        <ringGeometry args={[s.iceRadius * 0.32, s.iceRadius * 0.35, 96]} />
-        <meshBasicMaterial
-          color="#ffffff"
-          transparent
-          opacity={0.55}
-          depthWrite={false}
           side={THREE.DoubleSide}
         />
       </mesh>
@@ -283,6 +276,10 @@ function NormalizedModel({
 
   return <primitive object={model} position={position} rotation={rotation} />;
 }
+
+// ======================================================
+// PENGUIN
+// ======================================================
 
 function Penguin({ target, mode }) {
   const ref = useRef(null);
@@ -324,6 +321,10 @@ function Penguin({ target, mode }) {
   return <primitive ref={ref} object={model} position={[0, 0.03, 0]} />;
 }
 
+// ======================================================
+// COLLECTABLE OBJECT
+// ======================================================
+
 function Collectable({ target, mode, onCollect }) {
   const ref = useRef(null);
   const collectedRef = useRef(false);
@@ -333,8 +334,7 @@ function Collectable({ target, mode, onCollect }) {
 
   const s = mode === "android" ? GAME_SIZES.android : GAME_SIZES.ios;
 
-  const finalSize =
-    target.type === "plastic" ? s.plasticSize : s.itemSize;
+  const finalSize = target.type === "plastic" ? s.plasticSize : s.itemSize;
 
   const model = useMemo(() => {
     return normalizeModelToSize(gltf.scene, finalSize);
@@ -370,12 +370,11 @@ function Collectable({ target, mode, onCollect }) {
     [onCollect, target.type]
   );
 
-  const content = (
+  const objectContent = (
     <group ref={ref} position={position}>
       <primitive object={model} />
 
-      {/* Invisible larger tap area */}
-      <mesh>
+      <mesh visible={false}>
         <sphereGeometry args={[0.28, 24, 24]} />
         <meshBasicMaterial transparent opacity={0} depthWrite={false} />
       </mesh>
@@ -383,15 +382,12 @@ function Collectable({ target, mode, onCollect }) {
   );
 
   if (mode === "android") {
-    return <Interactive onSelect={handleCollect}>{content}</Interactive>;
+    return <Interactive onSelect={handleCollect}>{objectContent}</Interactive>;
   }
 
   return (
-    <group
-      onPointerDown={handleCollect}
-      onClick={(event) => event.stopPropagation()}
-    >
-      {content}
+    <group onPointerDown={handleCollect}>
+      {objectContent}
     </group>
   );
 }
@@ -435,8 +431,8 @@ function Reticle({ onPlace }) {
         const dirZ = spawnPosition.z - camera.position.z;
         const distance = Math.sqrt(dirX * dirX + dirZ * dirZ);
 
-        if (distance > 0 && distance < 1.7) {
-          const push = 1.7 - distance;
+        if (distance > 0 && distance < 1.3) {
+          const push = 1.3 - distance;
           spawnPosition.x += (dirX / distance) * push;
           spawnPosition.z += (dirZ / distance) * push;
         }
@@ -445,7 +441,7 @@ function Reticle({ onPlace }) {
       }}
     >
       <mesh ref={reticleRef} rotation={[-Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[0.18, 0.24, 48]} />
+        <ringGeometry args={[0.16, 0.22, 48]} />
         <meshBasicMaterial color="#ffffff" transparent opacity={0.95} />
       </mesh>
     </Interactive>
@@ -491,7 +487,7 @@ function IOSGameScene({ ready, target, isGameOver, onCollect }) {
 }
 
 // ======================================================
-// SMALL UI
+// INFO BOX
 // ======================================================
 
 function InfoBox({ text }) {
@@ -499,19 +495,19 @@ function InfoBox({ text }) {
     <div
       style={{
         position: "absolute",
+        top: "52%",
         left: "50%",
-        bottom: "90px",
-        transform: "translateX(-50%)",
+        transform: "translate(-50%, -50%)",
         color: "white",
-        background: "rgba(0,0,0,0.62)",
-        border: "1px solid rgba(255,255,255,0.25)",
-        padding: "12px 18px",
-        borderRadius: "18px",
-        fontWeight: "800",
+        fontSize: "18px",
+        fontWeight: "bold",
         textAlign: "center",
+        background: "rgba(0,0,0,0.72)",
+        padding: "14px 24px",
+        borderRadius: "18px",
         maxWidth: "330px",
+        backdropFilter: "blur(10px)",
         lineHeight: 1.4,
-        backdropFilter: "blur(8px)",
       }}
     >
       {text}
@@ -531,7 +527,7 @@ export default function App() {
   const [supportChecked, setSupportChecked] = useState(false);
 
   const [mode, setMode] = useState("intro");
-  // intro | android-webxr | ios-camera
+  // modes: intro | android-webxr | ios-camera
 
   const [isXRPresenting, setIsXRPresenting] = useState(false);
   const [androidGamePosition, setAndroidGamePosition] = useState(null);
@@ -539,7 +535,7 @@ export default function App() {
   const [iosCameraReady, setIOSCameraReady] = useState(false);
   const [iosCameraError, setIOSCameraError] = useState(null);
 
-  const [target, setTarget] = useState(() => createTarget("android"));
+  const [target, setTarget] = useState(() => createTarget());
 
   const [fishCount, setFishCount] = useState(0);
   const [krillCount, setKrillCount] = useState(0);
@@ -554,23 +550,21 @@ export default function App() {
   const isGameOver = Boolean(gameResult);
 
   // ======================================================
-  // SUPPORT CHECK
+  // PLATFORM CHECK
   // ======================================================
 
   useEffect(() => {
-    const checkSupport = async () => {
+    async function checkSupport() {
       const ios = isIOSDevice();
       setIsIOS(ios);
 
-      if (typeof navigator !== "undefined" && navigator.xr && !ios) {
+      if (navigator.xr && !ios) {
         try {
           const supported = await navigator.xr.isSessionSupported(
             "immersive-ar"
           );
-
           setWebXRSupported(supported);
-        } catch (error) {
-          console.error("WebXR check failed:", error);
+        } catch {
           setWebXRSupported(false);
         }
       } else {
@@ -578,7 +572,7 @@ export default function App() {
       }
 
       setSupportChecked(true);
-    };
+    }
 
     checkSupport();
   }, []);
@@ -590,7 +584,7 @@ export default function App() {
   useEffect(() => {
     ambience.current = new Audio("/audios/antarctic_ambience.mp3");
     ambience.current.loop = true;
-    ambience.current.volume = 0.3;
+    ambience.current.volume = 0.25;
 
     collectSound.current = new Audio("/audios/fish_collect.mp3");
     collectSound.current.volume = 0.8;
@@ -599,7 +593,7 @@ export default function App() {
     footsteps.current.volume = 0.4;
 
     penguinChirp.current = new Audio("/audios/baby_penguin.mp3");
-    penguinChirp.current.volume = 1.0;
+    penguinChirp.current.volume = 0.9;
 
     return () => {
       ambience.current?.pause();
@@ -643,7 +637,7 @@ export default function App() {
     setKrillCount(0);
     setTimeLeft(GAME_TIME);
     setGameResult(null);
-    setTarget(createTarget("android"));
+    setTarget(createTarget());
     setAndroidGamePosition(null);
     setIOSCameraReady(false);
     setIOSCameraError(null);
@@ -667,7 +661,7 @@ export default function App() {
     setKrillCount(0);
     setTimeLeft(GAME_TIME);
     setGameResult(null);
-    setTarget(createTarget(mode === "ios-camera" ? "ios" : "android"));
+    setTarget(createTarget());
 
     if (mode === "android-webxr") {
       setAndroidGamePosition(null);
@@ -720,7 +714,6 @@ export default function App() {
     (type) => {
       if (isGameOver) return;
 
-      // Plastic = instant fail
       if (type === "plastic") {
         setGameResult("plastic");
         stopAmbience();
@@ -748,13 +741,12 @@ export default function App() {
         return;
       }
 
-      setTarget(createTarget(mode === "ios-camera" ? "ios" : "android"));
+      setTarget(createTarget());
     },
     [
       isGameOver,
       fishCount,
       krillCount,
-      mode,
       playCollectSound,
       stopAmbience,
     ]
@@ -796,6 +788,10 @@ export default function App() {
     return "";
   };
 
+  // ======================================================
+  // RENDER
+  // ======================================================
+
   return (
     <div
       style={{
@@ -835,10 +831,25 @@ export default function App() {
               "radial-gradient(circle at top, rgba(66,153,225,0.35), rgba(7,17,31,0.95))",
           }}
         >
+          <div
+            style={{
+              padding: "12px 20px",
+              borderRadius: "999px",
+              background: "rgba(255,255,255,0.12)",
+              border: "1px solid rgba(255,255,255,0.25)",
+              marginBottom: "18px",
+              fontSize: "14px",
+              letterSpacing: "2px",
+            }}
+          >
+            ANTARCTICA AR EXPERIENCE
+          </div>
+
           <h1
             style={{
               fontSize: "52px",
               marginBottom: "10px",
+              lineHeight: 1,
               textShadow: "0 10px 35px rgba(0,0,0,0.5)",
             }}
           >
@@ -871,7 +882,9 @@ export default function App() {
             game fails.
           </p>
 
-          {!supportChecked && <p style={{ opacity: 0.8 }}>Checking AR support...</p>}
+          {!supportChecked && (
+            <p style={{ opacity: 0.8 }}>Checking AR support...</p>
+          )}
 
           {supportChecked && isIOS && (
             <button
@@ -1222,10 +1235,3 @@ export default function App() {
     </div>
   );
 }
-
-// Optional preload
-useGLTF.preload("/models/penguin.glb");
-useGLTF.preload("/models/ice_floe.glb");
-useGLTF.preload("/models/fish.glb");
-useGLTF.preload("/models/krill_antartic.glb");
-useGLTF.preload("/models/plastic_water_bottle.glb");

@@ -128,7 +128,7 @@ function normalizeModelToSize(scene, targetSize) {
   box.getCenter(center);
 
   const maxAxis = Math.max(size.x, size.y, size.z);
-  const scale = maxAxis > 0 ? targetSize / maxAxis : 1;
+  const scale = maxAxis > 0 ? targetSize / maxAxis : 0.002;
 
   clone.position.sub(center);
   clone.scale.setScalar(scale);
@@ -626,7 +626,14 @@ export default function App() {
       {androidCanUseWebXR && overlayElement && (
         <ARButton
           sessionInit={{ requiredFeatures: ["hit-test"], optionalFeatures: ["dom-overlay"], domOverlay: { root: overlayElement } }}
-          onClick={() => { resetGameState(); setMode("android-webxr"); playAmbience(); }}
+          onClick={() => {
+            // Give the hardware layer a split second to prepare
+            setTimeout(() => {
+              resetGameState();
+              setMode("android-webxr");
+              playAmbience();
+            }, 150);
+          }}
           style={{ position: "absolute", bottom: "42px", left: "50%", transform: "translateX(-50%)", padding: "16px 34px", fontSize: "17px", fontWeight: "bold", borderRadius: "999px", border: "none", background: "linear-gradient(135deg, #ffffff, #b7ecff)", color: "#07111f", cursor: "pointer", zIndex: 20, boxShadow: "0 10px 30px rgba(0,0,0,0.35)" }}
         />
       )}

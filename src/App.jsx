@@ -134,7 +134,8 @@ function normalizeModelToSize(scene, targetSize) {
   box.getCenter(center);
 
   const maxAxis = Math.max(size.x, size.y, size.z);
-  const scale = maxAxis > 0 ? targetSize / maxAxis : 0.002; // Safety fallback
+  // FIX: Fallback to 0.0075 instead of 1
+  const scale = maxAxis > 0 ? targetSize / maxAxis : 0.0075; 
 
   clone.position.sub(center);
   clone.scale.setScalar(scale);
@@ -316,8 +317,12 @@ function AndroidItem({ item, onCollect }) {
   const gltf = useGLTF(config.model);
   const { actions, names } = useAnimations(gltf.animations, ref);
 
-  const finalSize = item.type === "plastic" ? GAME_SIZES.android.plasticSize : GAME_SIZES.android.itemSize;
-  const model = useMemo(() => normalizeModelToSize(gltf.scene, finalSize), [gltf.scene, finalSize, item.id]);
+  // Use the validated stable scale from your config
+  const finalSize = GAME_SIZES.android.fishScale; 
+
+  const model = useMemo(() => {
+    return normalizeModelToSize(gltf.scene, finalSize);
+  }, [gltf.scene, finalSize, item.type]); // Depend on item.type to re-normalize if model changes
 
   useEffect(() => {
     if (item.type === "krill" && names && names.length > 0 && actions[names[0]]) {
@@ -335,7 +340,8 @@ function AndroidItem({ item, onCollect }) {
   return (
     <Interactive onSelect={() => onCollect(item.type)}>
       <group ref={ref} position={item.position}>
-        <primitive object={model} position={[0, 0, 0]} />
+        <primitive object={model} />
+        {/* Hitbox remains large so it's easy to click */}
         <mesh visible={false}>
           <sphereGeometry args={[0.24, 24, 24]} />
           <meshBasicMaterial transparent opacity={0} />

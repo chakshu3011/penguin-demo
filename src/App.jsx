@@ -315,36 +315,17 @@ function AndroidItem({ item, onCollect }) {
   const ref = useRef();
   const config = ITEM_CONFIG[item.type];
   const gltf = useGLTF(config.model);
-  const { actions, names } = useAnimations(gltf.animations, ref);
-
-  // Use the validated stable scale from your config
-  const finalSize = GAME_SIZES.android.fishScale; 
-
-  const model = useMemo(() => {
-    return normalizeModelToSize(gltf.scene, finalSize);
-  }, [gltf.scene, finalSize, item.type]); // Depend on item.type to re-normalize if model changes
-
-  useEffect(() => {
-    if (item.type === "krill" && names && names.length > 0 && actions[names[0]]) {
-      actions[names[0]].reset().play();
-    }
-  }, [item.type, actions, names]);
-
-  useFrame(() => {
-    if (ref.current) {
-      ref.current.rotation.y += 0.035;
-      ref.current.position.y = item.position[1] + Math.sin(Date.now() * 0.004) * 0.06;
-    }
-  });
 
   return (
     <Interactive onSelect={() => onCollect(item.type)}>
       <group ref={ref} position={item.position}>
-        <primitive object={model} />
-        {/* Hitbox remains large so it's easy to click */}
-        <mesh visible={false}>
-          <sphereGeometry args={[0.24, 24, 24]} />
-          <meshBasicMaterial transparent opacity={0} />
+        {/* 1. VISIBILITY TEST: MeshBasicMaterial ignores lights so it's always visible */}
+        <primitive object={gltf.scene} scale={0.0075} />
+        
+        {/* 2. DEBUG SPHERE: If you see a red ball but no fish, your model path is wrong */}
+        <mesh position={[0, 0, 0]}>
+          <sphereGeometry args={[0.05]} />
+          <meshBasicMaterial color="red" />
         </mesh>
       </group>
     </Interactive>

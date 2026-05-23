@@ -28,13 +28,10 @@ canvas {
   display: block;
 }
 
-/* MindAR sometimes creates video/canvas elements dynamically.
-   This helps them cover the full screen correctly on iOS. */
 video {
   object-fit: cover;
 }
 
-/* Optional: hide scrollbars if any browser creates small overflow */
 ::-webkit-scrollbar {
   display: none;
 }
